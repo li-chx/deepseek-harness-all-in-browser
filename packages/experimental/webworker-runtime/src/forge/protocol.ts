@@ -2,7 +2,7 @@
 import { forgeSharedPackages, isForgeCorePackage } from './package-policy.ts'
 
 /** Build generation required by every Forge artifact installed in this Worker. */
-export const FORGE_GENERATION = 'dsh-worker-rc2-7'
+export const FORGE_GENERATION = 'dsh-worker-rc2-8'
 
 /** Immutable file served by Forge. */
 export interface ForgeFile {
@@ -12,10 +12,13 @@ export interface ForgeFile {
   objectKey: string
 }
 
+/** Package export paths and conditional branches, evaluated by the Worker at resolution time. */
+export type ForgePackageExports = string | null | ForgePackageExports[] | { [key: string]: ForgePackageExports }
+
 /** Published entry metadata retained for Host and Client discovery. */
 export interface ForgePackageMetadata {
   repository?: string | { url: string }
-  exports?: Record<string, string>
+  exports?: ForgePackageExports
   dsh?: { bundle?: { patch: string }; client?: { inject: string[]; platform: 'web' } }
 }
 
@@ -26,6 +29,8 @@ export interface ForgePackage {
   version: string
   entry: string
   dependencies: Record<string, string>
+  /** Exact host names this package may resolve; the manifest provides their required versions. */
+  hostDependencies: string[]
   files: ForgeFile[]
   metadata?: ForgePackageMetadata
 }
@@ -118,6 +123,13 @@ export function parseForgeManifest(value: unknown, hostPackages: Readonly<Record
     if (shared.has(name) || isForgeCorePackage(name)) {
       throw new ForgeError('core-package', `The frontend owns ${name}; plugins cannot replace it`)
     }
+    if (!Array.isArray(pkg.hostDependencies) || !pkg.hostDependencies.every(name => typeof name === 'string')
+      || new Set(pkg.hostDependencies).size !== pkg.hostDependencies.length) {
+      throw new ForgeError('invalid-manifest', 'Package hostDependencies must contain unique names')
+    }
+    for (const name of pkg.hostDependencies) {
+      if (!Object.hasOwn(requiredHost, name)) throw new ForgeError('invalid-manifest', `Host dependency ${name} has no required version`)
+    }
     if (!Array.isArray(pkg.files)) throw new ForgeError('invalid-manifest', 'Package files are missing')
     const files = pkg.files.map((value): ForgeFile => {
       const file = object(value)
@@ -132,7 +144,8 @@ export function parseForgeManifest(value: unknown, hostPackages: Readonly<Record
     const entry = path(pkg.entry)
     if (!files.some(file => file.path === entry)) throw new ForgeError('invalid-manifest', 'Package entry is missing')
     const metadata = pkg.metadata === undefined ? undefined : parseMetadata(pkg.metadata, files)
-    return { id: pluginId(pkg.id), name, version: text(pkg.version), entry, dependencies: mapping(pkg.dependencies), files,
+    return { id: pluginId(pkg.id), name, version: text(pkg.version), entry,
+      dependencies: mapping(pkg.dependencies), hostDependencies: [...pkg.hostDependencies], files,
       ...metadata === undefined ? {} : { metadata } }
   })
   const objectSizes = new Map<string, number>()
@@ -145,6 +158,7 @@ export function parseForgeManifest(value: unknown, hostPackages: Readonly<Record
   if (byId.size !== packages.length) throw new ForgeError('invalid-manifest', 'Duplicate package id')
   for (const pkg of packages) {
     for (const [name, id] of Object.entries(pkg.dependencies)) {
+      if (pkg.hostDependencies.includes(name)) throw new ForgeError('invalid-manifest', `Dependency ${name} is both private and host-provided`)
       if (shared.has(name) || isForgeCorePackage(name)) {
         throw new ForgeError('core-package', `Shared dependency ${name} cannot be remapped`)
       }
@@ -181,12 +195,7 @@ function parseMetadata(value: unknown, files: ForgeFile[]): ForgePackageMetadata
     if (target !== 'package.json' && !files.some(file => file.path === target)) throw new ForgeError('invalid-manifest', 'Metadata points at a missing file')
     return target
   }
-  if (raw.exports !== undefined) {
-    metadata.exports = Object.fromEntries(Object.entries(mapping(raw.exports)).map(([key, value]) => {
-      if (key !== '.') { if (!key.startsWith('./')) throw new ForgeError('invalid-manifest', 'Invalid export key'); path(key.slice(2)) }
-      return [key, `./${filePath(value)}`]
-    }))
-  }
+  if (raw.exports !== undefined) metadata.exports = parseExports(raw.exports)
   if (raw.dsh !== undefined) {
     const dsh = object(raw.dsh)
     metadata.dsh = {}
@@ -198,4 +207,29 @@ function parseMetadata(value: unknown, files: ForgeFile[]): ForgePackageMetadata
     }
   }
   return metadata
+}
+
+function exportPath(value: string): void {
+  if (!value.startsWith('./')) throw new ForgeError('invalid-manifest', 'Export paths must be package-relative')
+  const target = value.slice(2)
+  path(target.replaceAll('*', '_'))
+  if (target.split('/').includes('node_modules')) throw new ForgeError('invalid-path', 'Export paths cannot enter node_modules')
+}
+
+function parseExports(value: unknown, subpaths = true): ForgePackageExports {
+  if (value === null) return null
+  if (typeof value === 'string') { exportPath(value); return value }
+  if (Array.isArray(value)) return value.map(item => parseExports(item, false))
+  const entries = Object.entries(object(value))
+  const subpathMap = entries.some(([key]) => key.startsWith('.'))
+  if (subpathMap && !subpaths) throw new ForgeError('invalid-manifest', 'Nested export subpath maps are unsupported')
+  return Object.fromEntries(entries.map(([key, child]) => {
+    if (subpathMap) {
+      if (key !== '.') exportPath(key)
+      if ((key.match(/\*/g) ?? []).length > 1) throw new ForgeError('invalid-manifest', 'Export keys allow at most one wildcard')
+    } else if (/^\d+$/.test(key) || key.length === 0) {
+      throw new ForgeError('invalid-manifest', 'Invalid export condition')
+    }
+    return [key, parseExports(child, false)]
+  }))
 }

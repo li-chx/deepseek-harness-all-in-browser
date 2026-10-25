@@ -6,7 +6,7 @@ import type Hmr from '@deepseek-ai/dsh-hmr'
 import type { MemoryVfs } from '../storage/memory.ts'
 import type { WorkerModuleLoader } from '../module-system/module-loader.ts'
 import { dirname, join, pathToFileUrl } from '../module-system/posix-path.ts'
-import { ForgeError, FORGE_GENERATION, parseForgeManifest, pluginId, object, type ForgeManifest, type ForgePackage } from './protocol.ts'
+import { ForgeError, FORGE_GENERATION, parseForgeManifest, pluginId, object, type ForgeManifest, type ForgePackage, type ForgePackageExports } from './protocol.ts'
 
 /** The current activation outcome; files may exist even when activation failed. */
 export interface ForgeInstalled {
@@ -61,6 +61,12 @@ export interface ForgeInstallerOptions {
 
 function digest(bytes: Uint8Array): string {
   return [...sha256(bytes)].map(value => value.toString(16).padStart(2, '0')).join('')
+}
+
+function publicExports(exports: ForgePackageExports | undefined): { [key: string]: ForgePackageExports } {
+  const subpaths = exports !== null && typeof exports === 'object' && !Array.isArray(exports)
+    && Object.keys(exports).some(key => key.startsWith('.')) ? exports : {}
+  return { ...subpaths, '.': './index.js' }
 }
 
 /** Plugin artifacts are owned by their manifest until explicitly replaced or removed. */
@@ -154,9 +160,7 @@ export class ForgeInstaller {
       for (const pkg of manifest.packages) {
         const directory = this.packageDirectory(pkg.id)
         const dependencies = scopes.get(directory) ?? {}
-        // Plan-wide host requirements may differ among owners of the same package.
-        // Private dependency edges and self references take precedence over that fallback.
-        for (const name of Object.keys(manifest.hostPackages)) dependencies[name] = this.options.modules.packageDirectory(name)
+        for (const name of pkg.hostDependencies) dependencies[name] = this.options.modules.packageDirectory(name)
         for (const [name, id] of Object.entries(pkg.dependencies)) dependencies[name] = this.packageDirectory(id)
         dependencies[pkg.name] = directory
         scopes.set(directory, dependencies)
@@ -164,11 +168,20 @@ export class ForgeInstaller {
     }
     const profileDependencies: Record<string, string> = {}
     for (const name of Object.keys(this.hostPackages)) profileDependencies[name] = this.options.modules.packageDirectory(name)
-    for (const manifest of this.manifests.values()) profileDependencies[manifest.plugin.name] = join(this.options.profileDirectory, 'node_modules', manifest.plugin.name)
+    const subpathDirectories = new Map<string, string>()
+    for (const manifest of this.manifests.values()) {
+      const publicDirectory = join(this.options.profileDirectory, 'node_modules', manifest.plugin.name)
+      const implementation = this.packageDirectory(manifest.plugin.packageId)
+      profileDependencies[manifest.plugin.name] = publicDirectory
+      const dependencies = scopes.get(implementation)
+      if (dependencies === undefined) throw new Error('Forge root package scope is missing')
+      scopes.set(publicDirectory, dependencies)
+      subpathDirectories.set(publicDirectory, implementation)
+    }
     scopes.set(this.options.profileDirectory, profileDependencies)
     this.options.modules.setPackageScopes(scopes)
     this.options.modules.setPackageAliases(new Map([...this.manifests.values()].map(manifest =>
-      [manifest.plugin.name, join(this.options.profileDirectory, 'node_modules', manifest.plugin.name)])))
+      [manifest.plugin.name, join(this.options.profileDirectory, 'node_modules', manifest.plugin.name)])), subpathDirectories)
   }
 
   private patch(id: string, entry: string | undefined): { path: string; text: string } {
@@ -377,7 +390,7 @@ export class ForgeInstaller {
           this.write(join(publicDirectory, file.path), data, result, paths)
         }
         this.write(join(publicDirectory, 'package.json'), JSON.stringify({ name: rootPackage.name, version: rootPackage.version,
-          main: 'index.js', ...rootPackage.metadata, exports: { ...rootPackage.metadata?.exports, '.': './index.js' } }), result, paths)
+          main: 'index.js', ...rootPackage.metadata, exports: publicExports(rootPackage.metadata?.exports) }), result, paths)
         this.write(profilePackage.path, profilePackage.text, result, paths)
         this.write(entryPath, `module.exports = require(${JSON.stringify(implementation)});\n`, result, paths)
         this.write(patch.path, patch.text, result, paths)

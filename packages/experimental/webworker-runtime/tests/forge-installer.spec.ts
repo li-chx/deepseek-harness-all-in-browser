@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
 import { lowerModuleSource } from '../src/compile/transform.ts'
 import { ForgeInstaller } from '../src/forge/installer.ts'
-import { FORGE_GENERATION, type ForgeManifest } from '../src/forge/protocol.ts'
+import { FORGE_GENERATION, type ForgeManifest, type ForgePackageExports } from '../src/forge/protocol.ts'
 import { editForgeProfilePatch } from '../src/forge/profile-patch.ts'
 import { MemoryVfs } from '../src/storage/memory.ts'
 import { WorkerModuleLoader } from '../src/module-system/module-loader.ts'
@@ -17,8 +17,8 @@ function plan(id = 'one', source = 'exports.value = require("helper").value', he
     manifest: { protocol: 1, generation: FORGE_GENERATION, revision: hash(id + source + helper),
       plugin: { id, name: `plugin-${id}`, version: '1.0.0', packageId: codeHash, entry: 'index.js' }, hostPackages: {},
       packages: [
-        { id: codeHash, name: `plugin-${id}`, version: '1.0.0', entry: 'index.js', dependencies: { helper: helperHash }, files: [{ path: 'index.js', sha256: codeHash, size: Buffer.byteLength(source), objectKey: `${FORGE_GENERATION}/objects/${codeHash}` }] },
-        { id: helperHash, name: 'helper', version: '1.0.0', entry: 'index.js', dependencies: {}, files: [{ path: 'index.js', sha256: helperHash, size: Buffer.byteLength(helper), objectKey: `${FORGE_GENERATION}/objects/${helperHash}` }] },
+        { id: codeHash, name: `plugin-${id}`, version: '1.0.0', entry: 'index.js', dependencies: { helper: helperHash }, hostDependencies: [], files: [{ path: 'index.js', sha256: codeHash, size: Buffer.byteLength(source), objectKey: `${FORGE_GENERATION}/objects/${codeHash}` }] },
+        { id: helperHash, name: 'helper', version: '1.0.0', entry: 'index.js', dependencies: {}, hostDependencies: [], files: [{ path: 'index.js', sha256: helperHash, size: Buffer.byteLength(helper), objectKey: `${FORGE_GENERATION}/objects/${helperHash}` }] },
       ] },
     files: new Map([[codeHash, source], [helperHash, helper]]),
   }
@@ -106,11 +106,11 @@ it('resolves two versions by importer and retains a dependency used by another i
 it('rejects the preceding frontend generation before downloading or writing', async () => {
   const f = fixture()
   const { manifest } = plan()
-  manifest.generation = 'dsh-worker-rc2-6'
+  manifest.generation = 'dsh-worker-rc2-7'
   for (const pkg of manifest.packages) {
-    for (const file of pkg.files) file.objectKey = `dsh-worker-rc2-6/objects/${file.sha256}`
+    for (const file of pkg.files) file.objectKey = `dsh-worker-rc2-7/objects/${file.sha256}`
   }
-  expect(f.installer.target().generation).toBe('dsh-worker-rc2-7')
+  expect(f.installer.target().generation).toBe('dsh-worker-rc2-8')
   await expect(f.installer.install(manifest, 'http://forge.local')).rejects.toMatchObject({ code: 'generation-mismatch' })
   expect(f.calls).toEqual([])
   expect(f.writes).toEqual([])
@@ -614,7 +614,7 @@ function privateHostPlan(id: string, version: number): ReturnType<typeof plan> {
   const consumerId = hash(consumer)
   result.files.set(consumerId, consumer)
   root.dependencies['host-consumer'] = consumerId
-  result.manifest.packages.push({ id: consumerId, name: 'host-consumer', version: '1.0.0', entry: 'index.js', dependencies: {},
+  result.manifest.packages.push({ id: consumerId, name: 'host-consumer', version: '1.0.0', entry: 'index.js', dependencies: {}, hostDependencies: ['host-lib'],
     files: [{ path: 'index.js', sha256: consumerId, size: Buffer.byteLength(consumer), objectKey: `${FORGE_GENERATION}/objects/${consumerId}` }] })
   result.manifest.hostPackages = { 'host-lib': '1.0.0' }
   return result
@@ -705,4 +705,120 @@ it('refuses an ordinary host library as the root plugin without changing global 
   expect(f.calls).toEqual([])
   expect(f.writes).toEqual([])
   expect(f.modules.requireFrom('/dsh')('host-lib')).toEqual({ shared: {} })
+})
+
+it('retains conditional and patterned exports, independent modules and a nested package manifest', async () => {
+  const f = fixture()
+  const result = plan('files', 'exports.read = name => require(name)')
+  const pkg = result.manifest.packages[0]!
+  const add = (path: string, source: string): void => {
+    const sha256 = hash(source)
+    result.files.set(sha256, source)
+    pkg.files.push({ path, sha256, size: Buffer.byteLength(source), objectKey: `${FORGE_GENERATION}/objects/${sha256}` })
+  }
+  add('parts/value.cts', 'module.exports = { value: 8 }')
+  add('folder/package.json', '{"main":"../parts/value.cts"}')
+  pkg.metadata = { exports: {
+    '.': [{ types: './types/omitted.d.ts', browser: './index.js' }, './index.js'],
+    './parts/*': './parts/*.cts', './blocked': null,
+  } }
+  for (const pair of result.files) f.artifacts.set(...pair)
+  expect(await f.installer.install(result.manifest, 'http://forge.local')).toMatchObject({ status: 'active' })
+  const immutable = `/dsh/home/profiles/web/plugins/.forge/packages/${pkg.id}`
+  const require = f.modules.requireFrom(immutable)
+  const plugin = require('./index.js') as { read(name: string): unknown }
+  expect(plugin.read('./folder')).toEqual({ value: 8 })
+  expect(plugin.read('plugin-files/parts/value')).toBe(plugin.read('./parts/value.cts'))
+  expect(() => plugin.read('plugin-files/blocked')).toThrow(expect.objectContaining({ code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' }))
+  expect(JSON.parse(f.vfs.readFileSync(`${immutable}/package.json`, 'utf8') as string)).toMatchObject({ exports: pkg.metadata.exports })
+  expect(f.vfs.readFileSync('/dsh/home/profiles/web/node_modules/plugin-files/index.js', 'utf8')).toContain(immutable)
+  expect(f.vfs.readFileSync(`${immutable}/index.js`, 'utf8')).toBe('exports.read = name => require(name)')
+})
+
+it.each<ForgePackageExports>(['./../outside.js', './node_modules/other/index.js', '/absolute.js', { './feature': './safe.js', browser: './browser.js' }])(
+  'rejects unsafe export metadata %j before file writes', async (exports) => {
+    const f = fixture()
+    const { manifest } = plan()
+    manifest.packages[0]!.metadata = { exports }
+    await expect(f.installer.install(manifest, 'http://forge.local')).rejects.toThrow()
+    expect(f.calls).toEqual([])
+    expect(f.writes).toEqual([])
+  },
+)
+
+it.each<ForgePackageExports>(['./index.js', [{ browser: './index.js' }, null], { browser: './index.js', default: './index.js' }])(
+  'keeps the public root wrapper for shorthand exports %j', async (exports) => {
+    const f = fixture()
+    const { manifest, files } = plan('short', 'exports.value = 8')
+    manifest.packages[0]!.metadata = { exports }
+    for (const pair of files) f.artifacts.set(...pair)
+    expect(await f.installer.install(manifest, 'http://forge.local')).toMatchObject({ status: 'active' })
+    expect(f.modules.requireFrom('/dsh')('plugin-short')).toEqual({ value: 8 })
+    expect(JSON.parse(f.vfs.readFileSync('/dsh/home/profiles/web/node_modules/plugin-short/package.json', 'utf8') as string))
+      .toMatchObject({ exports: { '.': './index.js' } })
+  },
+)
+
+it('grants host packages only to their declaring package, including public subpaths', async () => {
+  const f = fixture()
+  const result = plan('scoped', 'exports.read = name => require(name)', 'exports.read = () => require("host-lib")')
+  result.manifest.hostPackages = { 'host-lib': '1.0.0' }
+  result.manifest.packages[1]!.hostDependencies = ['host-lib']
+  const root = result.manifest.packages[0]!
+  root.metadata = { exports: { '.': './index.js', './entry': './index.js' } }
+  for (const pair of result.files) f.artifacts.set(...pair)
+  await f.installer.install(result.manifest, 'http://forge.local')
+  const require = f.modules.requireFrom('/dsh')
+  const plugin = require('plugin-scoped') as { read(name: string): unknown }
+  const helper = plugin.read('helper') as { read(): unknown }
+  expect(helper.read()).toBe(require('host-lib'))
+  expect(() => plugin.read('host-lib')).toThrow(expect.objectContaining({ code: 'MODULE_NOT_FOUND' }))
+  expect(require('plugin-scoped/entry')).toBe(plugin)
+  expect(require.resolve('plugin-scoped/entry')).toContain(`/plugins/.forge/packages/${root.id}/index.js`)
+})
+
+it('redirects Host subpaths to the immutable package while keeping Client files public', async () => {
+  const f = fixture()
+  const result = plan('subpath', 'exports.value = {}')
+  const root = result.manifest.packages[0]!
+  root.entry = 'lib/main.cjs'
+  root.files[0]!.path = root.entry
+  result.manifest.plugin.entry = root.entry
+  const child = 'module.exports = require("./main.cjs")'
+  const client = 'window.__ModuleLoader__.load({})'
+  for (const [path, source] of [['lib/child.cjs', child], ['client.js', client], ['data.json', '{"value":9}']] as const) {
+    const sha256 = hash(source)
+    result.files.set(sha256, source)
+    root.files.push({ path, sha256, size: Buffer.byteLength(source), objectKey: `${FORGE_GENERATION}/objects/${sha256}` })
+  }
+  root.metadata = { exports: { '.': './lib/main.cjs', './entry': './lib/main.cjs', './child': './lib/child.cjs', './client': './client.js', './data': './data.json' },
+    dsh: { client: { inject: [], platform: 'web' } } }
+  for (const pair of result.files) f.artifacts.set(...pair)
+  await f.installer.install(result.manifest, 'http://forge.local')
+  const require = f.modules.requireFrom('/dsh')
+  expect(require('plugin-subpath/entry')).toBe(require('plugin-subpath'))
+  expect(require('plugin-subpath/child')).toBe(require('plugin-subpath'))
+  const implementation = f.modules.requireFrom(`/dsh/home/profiles/web/plugins/.forge/packages/${root.id}`)
+  expect(implementation('plugin-subpath/child')).toBe(require('plugin-subpath/child'))
+  expect(implementation('./data.json')).toBe(require('plugin-subpath/data'))
+  expect(f.vfs.readFileSync('/dsh/home/profiles/web/node_modules/plugin-subpath/client.js', 'utf8')).toBe(client)
+  const publicChild = f.modules.requireFrom('/dsh/home/profiles/web/node_modules/plugin-subpath')
+  expect(() => publicChild('host-lib')).toThrow(expect.objectContaining({ code: 'MODULE_NOT_FOUND' }))
+})
+
+it.each(['missing', 'duplicate', 'undeclared', 'private-conflict'] as const)('rejects invalid per-package host grant %s before writes', async (kind) => {
+  const f = fixture()
+  const { manifest } = plan()
+  const root = manifest.packages[0]!
+  if (kind === 'duplicate') { manifest.hostPackages = { 'host-lib': '1.0.0' }; root.hostDependencies = ['host-lib', 'host-lib'] }
+  if (kind === 'undeclared') root.hostDependencies = ['host-lib']
+  if (kind === 'private-conflict') {
+    manifest.hostPackages = { 'host-lib': '1.0.0' }
+    root.hostDependencies = ['host-lib']
+    root.dependencies['host-lib'] = manifest.packages[1]!.id
+  }
+  const value = kind === 'missing' ? { ...manifest, packages: manifest.packages.map(({ hostDependencies: _omitted, ...pkg }) => pkg) } : manifest
+  await expect(f.installer.install(value, 'http://forge.local')).rejects.toMatchObject({ code: 'invalid-manifest' })
+  expect(f.calls).toEqual([])
+  expect(f.writes).toEqual([])
 })

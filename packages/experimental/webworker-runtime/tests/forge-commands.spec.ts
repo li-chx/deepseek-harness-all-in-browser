@@ -28,7 +28,7 @@ function fixture() {
   const id = hash('package')
   const manifest: ForgeManifest = { protocol: 1, generation: FORGE_GENERATION, revision: id,
     plugin: { id: 'example', name: 'example', version: '1.0.0', entry: 'index.js', packageId: id }, hostPackages: {},
-    packages: [{ id, name: 'example', version: '1.0.0', entry: 'index.js', dependencies: {},
+    packages: [{ id, name: 'example', version: '1.0.0', entry: 'index.js', dependencies: {}, hostDependencies: [],
       metadata: { repository: { url: 'https://github.com/example/example' },
         exports: { '.': './index.js', './client': './client/client.js' },
         dsh: { bundle: { patch: 'cordis.patch.yml' }, client: { platform: 'web', inject: ['locale'] } } },

@@ -54,7 +54,7 @@ export {
   type VfsFileHandle, type VfsReadOptions, type VfsStats, type VfsWriteOptions,
 } from './storage/types.ts'
 export { ForgeInstaller, type ForgeInstalled, type ForgeResult, type ForgeBatchEvent, type ForgeInstallerOptions } from './forge/installer.ts'
-export { FORGE_GENERATION, ForgeError, parseForgeManifest, type ForgeManifest, type ForgePackage, type ForgeFile } from './forge/protocol.ts'
+export { FORGE_GENERATION, ForgeError, parseForgeManifest, type ForgeManifest, type ForgePackage, type ForgeFile, type ForgePackageExports } from './forge/protocol.ts'
 export { readForgeHostPackages } from './forge/host.ts'
 export { WorkerHttpTransport, type HttpTransport, type HttpFetch } from './transport/http-transport.ts'
 export { PortHttpTransport, serveHttpTransport } from './transport/http-port.ts'

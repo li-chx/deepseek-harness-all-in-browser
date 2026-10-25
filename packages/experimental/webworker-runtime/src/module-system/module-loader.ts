@@ -23,7 +23,7 @@ import type { MemoryVfs } from '../storage/memory.ts'
 export const DEFAULT_CONDITIONS = ['browser', 'require', 'import', 'default'] as const
 
 /** Extensions probed when a specifier has no usable one. */
-const EXTENSIONS = ['.js', '.json', '.mjs', '.cjs'] as const
+const EXTENSIONS = ['.js', '.json', '.mjs', '.cjs', '.ts', '.mts', '.cts', '.tsx', '.jsx'] as const
 
 type ExportsField = string | null | readonly ExportsField[] | { readonly [key: string]: ExportsField }
 
@@ -130,6 +130,7 @@ export class WorkerModuleLoader {
   private readonly modules = new Map<string, ModuleRecord>()
   private readonly manifests = new Map<string, PackageManifest>()
   private readonly packageAliases = new Map<string, string>()
+  private readonly packageSubpathDirectories = new Map<string, string>()
   private readonly packageScopes = new Map<string, Readonly<Record<string, string>>>()
   private readonly stack: string[] = []
   private readonly bootstrapModules = new Set<string>()
@@ -192,7 +193,7 @@ export class WorkerModuleLoader {
    * @param detail - What failed.
    * @param code - Node error code for a resolution failure Node also reports by code.
    */
-  private fail(detail: string, code?: 'MODULE_NOT_FOUND' | 'ERR_PACKAGE_PATH_NOT_EXPORTED'): never {
+  private fail(detail: string, code?: 'MODULE_NOT_FOUND' | 'ERR_PACKAGE_PATH_NOT_EXPORTED' | 'ERR_INVALID_PACKAGE_TARGET'): never {
     const chain = this.stack.length === 0 ? '' : ` (importer chain: ${this.stack.join(' -> ')})`
     const error = new Error(`webworker modules: ${detail}${chain}`)
     throw code === undefined ? error : Object.assign(error, { code })
@@ -278,7 +279,9 @@ export class WorkerModuleLoader {
   }
 
   /** Extension and directory probing for a concrete path. */
-  private probe(path: string, specifier: string): string {
+  private probe(path: string, specifier: string, visited = new Set<string>()): string {
+    if (visited.has(path)) return this.fail(`cannot resolve "${specifier}": circular package main at ${path}`, 'MODULE_NOT_FOUND')
+    visited.add(path)
     const candidates: string[] = [path, ...EXTENSIONS.map(extension => path + extension)]
     for (const candidate of candidates) {
       if (this.vfs.existsSync(candidate) && this.vfs.statSync(candidate).isFile()) return candidate
@@ -286,9 +289,9 @@ export class WorkerModuleLoader {
     if (this.vfs.existsSync(path) && this.vfs.statSync(path).isDirectory()) {
       if (this.vfs.existsSync(join(path, 'package.json'))) {
         const main = this.manifestOf(path).main
-        if (main !== undefined) return this.probe(join(path, main), specifier)
+        if (main !== undefined) return this.probe(join(path, main), specifier, visited)
       }
-      return this.probe(join(path, 'index'), specifier)
+      return this.probe(join(path, 'index'), specifier, visited)
     }
     return this.fail(`cannot resolve "${specifier}": no file at ${candidates.join(', ')}`, 'MODULE_NOT_FOUND')
   }
@@ -338,7 +341,8 @@ export class WorkerModuleLoader {
     if (scoped !== undefined && mapped === undefined) {
       return this.fail(`undeclared dependency "${packageName}" from ${scope}`, 'MODULE_NOT_FOUND')
     }
-    const packageDirectory = mapped ?? this.packageAliases.get(packageName) ?? join(this.root, 'node_modules', packageName)
+    const packageRoot = mapped ?? this.packageAliases.get(packageName) ?? join(this.root, 'node_modules', packageName)
+    const packageDirectory = rest === '' ? packageRoot : this.packageSubpathDirectories.get(packageRoot) ?? packageRoot
     if (!this.vfs.existsSync(join(packageDirectory, 'package.json'))) {
       return this.fail(`cannot resolve "${specifier}": ${packageDirectory}/package.json is not in the image`, 'MODULE_NOT_FOUND')
     }
@@ -351,6 +355,9 @@ export class WorkerModuleLoader {
           `"${packageName}" does not export "${subpath}" under conditions [${[...this.conditions].join(', ')}]`,
           'ERR_PACKAGE_PATH_NOT_EXPORTED',
         )
+      }
+      if (!target.startsWith('./') || target.slice(2).split('/').some(part => part === '..' || part === '.' || part === 'node_modules')) {
+        return this.fail(`"${packageName}" exports invalid target "${target}"`, 'ERR_INVALID_PACKAGE_TARGET')
       }
       return { kind: 'file', path: this.probe(join(packageDirectory, target), specifier) }
     }
@@ -457,9 +464,7 @@ export class WorkerModuleLoader {
     }
     const resolve = ((specifier: string): string => {
       const resolution = this.resolve(specifier, fromDirectory)
-      if (resolution.kind === 'static') {
-        return this.fail(`"${specifier}" is a worker-provided module and has no VFS path`)
-      }
+      if (resolution.kind === 'static') return resolution.specifier
       return resolution.path
     }) as WorkerRequireResolve
     resolve.paths = (specifier: string): string[] | null => {
@@ -499,9 +504,13 @@ export class WorkerModuleLoader {
 
   /** Publish profile plugin names for Loader imports originating in its host package.
    * @param aliases Plugin package names and their managed directories; image packages remain caller-protected.
+   * @param subpathDirectories Public directories whose subpaths use an immutable implementation.
+   * Bare roots retain their HMR wrappers.
    */
-  setPackageAliases(aliases: ReadonlyMap<string, string>): void {
+  setPackageAliases(aliases: ReadonlyMap<string, string>, subpathDirectories: ReadonlyMap<string, string> = new Map()): void {
     this.packageAliases.clear()
+    this.packageSubpathDirectories.clear()
+    for (const [directory, implementation] of subpathDirectories) this.packageSubpathDirectories.set(directory, implementation)
     for (const [name, directory] of aliases) this.packageAliases.set(name, directory)
     this.manifests.clear()
   }
