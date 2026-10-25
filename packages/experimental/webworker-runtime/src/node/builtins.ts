@@ -11,7 +11,9 @@
  *
  * Import paths carry the classification: `./implemented/<module>.ts` backs the
  * module's real semantics over a worker data source, while `./mock/<module>.ts`
- * is a structural placeholder whose calls report the missing capability. File
+ * is a structural placeholder excluded from Forge admission. `./optional/<module>.ts`
+ * admits imports for plugins that handle missing capabilities; unsupported calls
+ * still refuse. No classification reports warnings merely on import. File
  * names match their Node module specifiers exactly, nesting included.
  *
  * Every value is a {@link StaticModuleFactory}, so the loader reads a table
@@ -25,7 +27,8 @@ import * as nodeAssertStrict from './builtin_modules/implemented/assert/strict.t
 import * as nodeAsyncHooks from './builtin_modules/implemented/async_hooks.ts'
 import * as nodeBuffer from './builtin_modules/implemented/buffer.ts'
 import * as nodeCrypto from './builtin_modules/implemented/crypto.ts'
-import * as nodeDnsPromises from './builtin_modules/mock/dns/promises.ts'
+import * as nodeDns from './builtin_modules/optional/dns.ts'
+import * as nodeDnsPromises from './builtin_modules/optional/dns/promises.ts'
 import * as nodeEvents from './builtin_modules/implemented/events.ts'
 import * as nodeFs from './builtin_modules/implemented/fs.ts'
 import * as nodeFsPromises from './builtin_modules/implemented/fs/promises.ts'
@@ -70,6 +73,7 @@ const BUILTINS: Record<string, StaticModuleFactory> = {
   buffer: () => nodeBuffer,
   child_process: () => nodeChildProcess,
   crypto: () => nodeCrypto,
+  dns: () => nodeDns,
   'dns/promises': () => nodeDnsPromises,
   events: () => nodeEvents,
   fs: () => nodeFs,

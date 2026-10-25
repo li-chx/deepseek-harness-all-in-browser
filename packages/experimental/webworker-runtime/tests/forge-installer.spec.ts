@@ -106,11 +106,11 @@ it('resolves two versions by importer and retains a dependency used by another i
 it('rejects the preceding frontend generation before downloading or writing', async () => {
   const f = fixture()
   const { manifest } = plan()
-  manifest.generation = 'dsh-worker-rc2-3'
+  manifest.generation = 'dsh-worker-rc2-4'
   for (const pkg of manifest.packages) {
-    for (const file of pkg.files) file.objectKey = `dsh-worker-rc2-3/objects/${file.sha256}`
+    for (const file of pkg.files) file.objectKey = `dsh-worker-rc2-4/objects/${file.sha256}`
   }
-  expect(f.installer.target().generation).toBe('dsh-worker-rc2-4')
+  expect(f.installer.target().generation).toBe('dsh-worker-rc2-5')
   await expect(f.installer.install(manifest, 'http://forge.local')).rejects.toMatchObject({ code: 'generation-mismatch' })
   expect(f.calls).toEqual([])
   expect(f.writes).toEqual([])

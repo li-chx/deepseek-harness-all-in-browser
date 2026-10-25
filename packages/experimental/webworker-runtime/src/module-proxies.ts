@@ -9,8 +9,9 @@
  * The replacement path states the classification. `./node/builtin_modules/implemented/<module>.ts`
  * carries the module's real semantics over a worker-side data source (VFS, the
  * tunnel, a wasm codec, a browser primitive); `./node/builtin_modules/mock/<module>.ts` is a
- * structural placeholder that mounts silently and reports the missing capability
- * when a call finally reaches it. External npm replacements live in
+ * structural placeholder excluded from Forge admission. `./node/builtin_modules/optional/<module>.ts`
+ * admits imports for plugins that can handle unavailable operations; calls still report
+ * missing capabilities. All three classifications mount without capability warnings. External npm replacements live in
  * `./externals/`, named after the package they stand in for.
  * @module @deepseek-ai/dsh-experimental-webworker-runtime/src/module-proxies
  */
@@ -60,9 +61,12 @@ export const MODULE_PROXIES: Record<string, string> = {
   'node:child_process': './node/builtin_modules/implemented/child_process.ts',
   'node:https': './node/builtin_modules/implemented/https.ts',
   'https': './node/builtin_modules/implemented/https.ts',
-  // Structural mocks: every symbol exists, every call throws.
-  'node:dns/promises': './node/builtin_modules/mock/dns/promises.ts',
-  'dns/promises': './node/builtin_modules/mock/dns/promises.ts',
+  // Optional namespaces admit imports; unsupported operations still refuse when called.
+  'node:dns': './node/builtin_modules/optional/dns.ts',
+  'dns': './node/builtin_modules/optional/dns.ts',
+  'node:dns/promises': './node/builtin_modules/optional/dns/promises.ts',
+  'dns/promises': './node/builtin_modules/optional/dns/promises.ts',
+  // Structural mocks remain excluded from Forge plugin admission.
   'node:net': './node/builtin_modules/mock/net.ts',
   'node:stream': './node/builtin_modules/implemented/stream.ts',
   'node:string_decoder': './node/builtin_modules/implemented/string_decoder.ts',

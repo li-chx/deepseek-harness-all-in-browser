@@ -1,5 +1,5 @@
 /**
- * `node:dns/promises` stub. The static WebWorker preview has no DNS resolver;
+ * `node:dns/promises` optional namespace. Importing is silent; lookup refuses. The static WebWorker preview has no DNS resolver;
  * reaching public-address preflight must fail loud instead of inventing an
  * address or bypassing the native HTTP provider's SSRF policy.
  */

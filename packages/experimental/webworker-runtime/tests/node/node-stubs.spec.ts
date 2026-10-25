@@ -14,7 +14,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { notAvailableError, notImplementedFail } from '../../src/node/notImplementedFail.ts'
 import * as childProcess from '../../src/node/builtin_modules/implemented/child_process.ts'
-import * as dnsPromises from '../../src/node/builtin_modules/mock/dns/promises.ts'
+import * as dns from '../../src/node/builtin_modules/optional/dns.ts'
+import * as dnsPromises from '../../src/node/builtin_modules/optional/dns/promises.ts'
 import * as https from '../../src/node/builtin_modules/implemented/https.ts'
 import * as net from '../../src/node/builtin_modules/mock/net.ts'
 import * as sqlite from '../../src/node/builtin_modules/mock/sqlite.ts'
@@ -41,6 +42,7 @@ const quiet = (): void => { vi.spyOn(console, 'error').mockImplementation(() => 
 
 /** Symbols that refuse when called. */
 const CALLED: [string, Record<string, unknown>, readonly string[]][] = [
+  ['node:dns', dns, ['lookup', 'setDefaultResultOrder', 'getDefaultResultOrder']],
   ['node:dns/promises', dnsPromises, ['lookup']],
   ['node:https', https, ['createServer']],
   ['node:net', net, ['createServer', 'connect']],

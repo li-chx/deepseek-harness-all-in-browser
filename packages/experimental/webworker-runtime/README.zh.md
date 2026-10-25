@@ -46,7 +46,7 @@ kind: "package-library"
 <a id="forge-plugin-updates"></a>
 ## Forge 插件更新
 
-预览页面通过 `?forge=<HTTP 服务地址>` 打开可选控制面板。**DSH Forge** 将 TypeScript Host 插件源码或 npm 包规格提交给该服务，并通过运行中的 Worker 应用编译清单。rc.2 前端内嵌 `FORGE_GENERATION = 'dsh-worker-rc2-4'`，在下载或写入前拒绝其他代际的产物。服务必须面向同一代际以及基础镜像提供的准确宿主包版本。核心包和共享宿主模块由前端构建提供。目标单独声明 `clientPackages`，在应用 overlay 前从可信基础镜像捕获；页面共享包的准确版本用于满足 Client 依赖，不授予 Host 导入能力。缺失或不匹配的 Client 依赖，以及替换共享 Client 包的尝试，均在文件写入前拒绝。带有受支持的单入口 `dsh.bundle` patch 的发布包可以携带现成的 Client bundle；包元数据和资源进入普通 Client 图及 HMR 路径。
+预览页面通过 `?forge=<HTTP 服务地址>` 打开可选控制面板。**DSH Forge** 将 TypeScript Host 插件源码或 npm 包规格提交给该服务，并通过运行中的 Worker 应用编译清单。rc.2 前端内嵌 `FORGE_GENERATION = 'dsh-worker-rc2-5'`，在下载或写入前拒绝其他代际的产物。服务必须面向同一代际以及基础镜像提供的准确宿主包版本。核心包和共享宿主模块由前端构建提供。目标单独声明 `clientPackages`，在应用 overlay 前从可信基础镜像捕获；页面共享包的准确版本用于满足 Client 依赖，不授予 Host 导入能力。缺失或不匹配的 Client 依赖，以及替换共享 Client 包的尝试，均在文件写入前拒绝。带有受支持的单入口 `dsh.bundle` patch 的发布包可以携带现成的 Client bundle；包元数据和资源进入普通 Client 图及 HMR 路径。
 
 安装器在修改文件前校验完整清单、受支持的 bundle patch 和缺失产物的字节。支持的 bundle patch 必须只包含一次自包 `insert`，条目仅含 `id`、`name` 及可选的 JSON 兼容字面量 `config`（对象、数组、标量或 null），配置结构由插件自行校验。同一 patch 还可用唯一 `id` 覆盖已有根条目的字面量 `config`、`disabled`（布尔值或 null）或两者。覆盖不能指向自身插入条目，也不能改变拓扑；原生 Cordis 合成应用这些覆盖，不改变核心包版本。安装器保留原始 patch 字节及顺序；插入条目的额外字段（包括 `disabled`）、覆盖条目的额外字段、非有限数字、YAML 别名和非 JSON 标签均在写入前拒绝。发布的 bundle 使用 profile 原生的 `dsh.profile.bundles` 选择及其原始 patch id；更新会删除旧的 Forge 注册行，使原生控制和 Forge 共用一个实例。更新保留原生禁用选择并报告 `disabled`；已安装状态查询读取当前选择和实时 Loader 条目。原生禁用条目仅在 fiber 不活跃后报告 `disabled`；启用但导入失败的条目仍报告激活失败。不含 bundle 元数据的插件使用 Forge 管理的 profile patch 行。无关的 profile 字段和 patch 行保持不变。
 
@@ -83,7 +83,7 @@ kind: "package-library"
 <a id="known-limitations-and-deferred-work"></a>
 
 - **worker 组合写明文会话日志**（镜像 home patch 中的 `compression: 'none'`；ConfigEditor 会拒绝修改这一行的配置）：不带 Zstandard 编解码器，导出日志是 `.jsonl`，不会是 `.jsonl.zstd`。
-- **`node:dns/promises`、`node:vm`、`node:net`、`node:sqlite`、`node:worker_threads` 是结构化 stub**：每次调用在 console 报告拒绝，并抛出带 Node `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` 错误码的错误。需要原生 DNS、真进程或真 realm 隔离的行在此无法运行。
+- **内置模块按实现路径决定导入准入**：`implemented/` 提供 Worker 行为；`optional/` 允许导入，但不可用操作抛出 `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`；`mock/` 仍不允许进入 Forge 插件构建。`node:dns` 和 `node:dns/promises` 是可选命名空间：导入静默，设置或读取结果顺序及地址查询则在控制台报告不可用操作并抛错。插件可捕获错误后继续运行；这里不提供 DNS 查询、结果顺序修改或假成功的空操作。`node:vm`、`node:net`、`node:sqlite` 和 `node:worker_threads` 仍是结构占位。
 - **`node:assert/strict` 仅支持真值断言**：对于假值，可调用的默认导出和 `ok` 使用传入的消息或通用文本抛出 `ERR_ASSERTION`，或原样抛出传入的 Error。其他断言 API 未提供。
 - **网络兼容能力使用配置的 HTTP 提供器**：`node:https.get` 支持 registry 元数据响应，虚拟 `curl` 支持 Plugin Hub 目录和探测使用的参数。默认提供器遵守浏览器 CORS 规则；进程代理设置、自定义 TLS 选项和同步网络请求不受支持。
 - **原生响应原型补丁不影响隧道**：合成响应不继承 `http.ServerResponse.prototype`；插件在此原型上安装的 gzip 或 Brotli 压缩补丁不会压缩隧道响应。

@@ -127,7 +127,7 @@ describe('module identity through the loader', () => {
 
   it('refuses a specifier the table does not hold, instead of resolving it empty', () => {
     const require = loaderRequire()
-    expect(() => require('node:dns')).toThrow()
+    expect(() => require('node:dgram')).toThrow()
   })
 
   it('exposes the package search paths used by the VFS resolver', () => {

@@ -1,5 +1,5 @@
 /** Wire validation for plugin artifacts targeting this Worker build. */
-export const FORGE_GENERATION = 'dsh-worker-rc2-4'
+export const FORGE_GENERATION = 'dsh-worker-rc2-5'
 
 /** Immutable file served by Forge. */
 export interface ForgeFile {

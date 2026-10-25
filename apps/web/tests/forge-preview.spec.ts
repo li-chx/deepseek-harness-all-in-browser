@@ -6,7 +6,7 @@ import { mountForgePreview } from '../src/forge-preview.ts'
 const response = (value: object, status = 200): Response => new Response(JSON.stringify(value), {
   status, headers: { 'content-type': 'application/json' },
 })
-const target = { protocol: 1, generation: 'dsh-worker-rc2-4', hostPackages: {} }
+const target = { protocol: 1, generation: 'dsh-worker-rc2-5', hostPackages: {} }
 const dialogMethods = ['showModal', 'close'] as const
 const originalDialogMethods = dialogMethods.map(key => Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key))
 let dispose: (() => void) | undefined
