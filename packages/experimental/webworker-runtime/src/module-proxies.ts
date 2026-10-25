@@ -65,6 +65,7 @@ export const MODULE_PROXIES: Record<string, string> = {
   'dns/promises': './node/builtin_modules/mock/dns/promises.ts',
   'node:net': './node/builtin_modules/mock/net.ts',
   'node:stream': './node/builtin_modules/implemented/stream.ts',
+  'node:string_decoder': './node/builtin_modules/implemented/string_decoder.ts',
   'node:stream/promises': './node/builtin_modules/implemented/stream/promises.ts',
   'stream/promises': './node/builtin_modules/implemented/stream/promises.ts',
   'node:vm': './node/builtin_modules/mock/vm.ts',

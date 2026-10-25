@@ -14,12 +14,12 @@
  * the fiber's entry name dirty; a microtask flush reconciles each dirty name
  * against the live loader entries. The activation pass seeds the same dirty
  * set with all current entries and flushes synchronously, so first scan and
- * steady state share one implementation. Package metadata (including the
- * negative "not a client package" verdict) is cached per Loader specifier and
- * owning-tree base URL until restart. The manifest package name identifies
- * the browser module; distinct active Loader sources for that package are a
- * composition error. Bundle content changes reach the graph only through
- * {@link ClientModuleRegistry.rebuilt}.
+ * steady state share one implementation. Reconciliation reads the package
+ * manifest and bundle again, so restarted Loader entries publish changed
+ * declarations and revisions; unchanged snapshots publish nothing. The
+ * manifest package name identifies the browser module. Distinct active Loader
+ * sources for that package are a composition error. Bundle rebuilds outside
+ * an entry restart reach the graph through {@link ClientModuleRegistry.rebuilt}.
  * @module @deepseek-ai/dsh-client-modules
  */
 
@@ -30,6 +30,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { isDeepStrictEqual } from 'node:util'
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Entry } from '@deepseek-ai/cordis-plugin-loader'
@@ -69,7 +70,7 @@ export interface ClientArtifactBaseline {
   readonly size: number
 }
 
-/** Resolved metadata cached for one Loader specifier and owning-tree base URL until restart. */
+/** Package metadata read from the manifest of one active Loader source. */
 interface PkgMeta extends WebBootRowFields {
   clientPath: string
 }
@@ -610,9 +611,6 @@ export class ClientModuleRegistry extends Service {
   private readonly release: WebBootRelease
   private readonly table = new Map<string, WebPluginRecord>()
   private readonly sources = new Map<string, ClientPackageSource>()
-  // Resolution is entry-local: the same specifier can resolve differently in
-  // separate config trees. Negative verdicts remain stable until restart.
-  private readonly pkgMeta = new Map<string, ResolvedPkgMeta | null>()
   private readonly rebuildListeners = new Set<(id: string, rev: string) => void>()
   private readonly graphListeners = new Set<() => void>()
   private readonly dirty = new Set<string>()
@@ -721,7 +719,7 @@ export class ClientModuleRegistry extends Service {
 
   /**
    * Publish one completed bundle generation (the HMR watch's registration
-   * hook — the only entry point through which build changes reach the graph).
+   * hook; entry restarts publish through reconciliation).
    * Unchanged mtime, ctime and size preserve the graph without reading the bundle.
    * @param id - entry id (package name).
    * @returns the current artifact rev, or undefined for an unknown id.
@@ -751,7 +749,7 @@ export class ClientModuleRegistry extends Service {
   }
 
   /**
-   * Subscribe to bundle rebuilds; fires only when artifact metadata changes the rev.
+   * Subscribe to revisions published by `rebuilt()`; entry restarts notify graph listeners instead.
    * @param listener - receives the entry id and its new bundle rev.
    * @returns the unsubscriber.
    */
@@ -842,14 +840,10 @@ export class ClientModuleRegistry extends Service {
   }
 
   private resolveMeta(loaderName: string, baseUrl: string): ResolvedPkgMeta | null {
-    const sourceKey = this.sourceKey(loaderName, baseUrl)
-    const cached = this.pkgMeta.get(sourceKey)
-    if (cached !== undefined) return cached
     const located = this.locatePkgJson(loaderName, baseUrl)
     if (located === undefined) {
       // Not a resolvable package root: loader builtins (cordis:include) and
-      // subpath entries (…/gateway) land here — permanently not a client row.
-      this.pkgMeta.set(sourceKey, null)
+      // subpath entries (…/gateway) land here — not a client row.
       return null
     }
     const { packageName, path: pkgPath } = located
@@ -859,10 +853,7 @@ export class ClientModuleRegistry extends Service {
       packageName,
       dsh !== null && typeof dsh === 'object' ? (dsh as Record<string, unknown>).client : undefined,
     )
-    if (decl === undefined || decl.platform !== 'web') {
-      this.pkgMeta.set(sourceKey, null)
-      return null
-    }
+    if (decl === undefined || decl.platform !== 'web') return null
     const clientRel = clientExportOf(packageName, pkg.exports)
     if (clientRel === undefined) {
       throw new Error(`client-modules: ${packageName} declares dsh.client but exports no "./client" bundle`)
@@ -873,9 +864,7 @@ export class ClientModuleRegistry extends Service {
       external: decl.external ?? [],
       immediately: decl.immediately === true,
     }
-    const resolved = { packageName, meta }
-    this.pkgMeta.set(sourceKey, resolved)
-    return resolved
+    return { packageName, meta }
   }
 
   /**
@@ -920,7 +909,7 @@ export class ClientModuleRegistry extends Service {
         : internal.resolveSync(loaderName, baseUrl, {}).url
     } catch {
       // The Loader cannot resolve the name: its row cannot have imported, so
-      // the name is permanently not a client row.
+      // it is not a client row.
       return undefined
     }
     return this.nearestPackage(moduleUrl, expectedPackageName)
@@ -1054,12 +1043,14 @@ export class ClientModuleRegistry extends Service {
     }
     const source = sources[0]
     if (source === undefined) return this.table.delete(packageName)
-    if (this.table.get(packageName)?.sourceKey === source.sourceKey) return false
     // Startup and HMR share revisions so unchanged artifacts survive a server restart.
     const snapshot = this.initialBundleSnapshot(packageName, source.meta.clientPath)
-    const rev = artifactRevision(snapshot.baseline)
+    const entry = graphRow(packageName, artifactRevision(snapshot.baseline), source.meta)
+    const current = this.table.get(packageName)
+    if (current?.sourceKey === source.sourceKey
+      && isDeepStrictEqual(current.meta, source.meta) && isDeepStrictEqual(current.entry, entry)) return false
     this.table.set(packageName, {
-      entry: graphRow(packageName, rev, source.meta),
+      entry,
       loaderName: source.loaderName,
       sourceKey: source.sourceKey,
       meta: source.meta,

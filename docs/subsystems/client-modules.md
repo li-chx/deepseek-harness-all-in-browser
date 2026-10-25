@@ -171,7 +171,7 @@ artifactBaseline(id: string): ClientArtifactBaseline | undefined
 
 /**
  * Publish one completed bundle generation (the HMR watch's registration
- * hook — the only entry point through which build changes reach the graph).
+ * hook; entry restarts publish through reconciliation).
  * Unchanged mtime, ctime and size preserve the graph without reading the bundle.
  * @param id - entry id (package name).
  * @returns the current artifact rev, or undefined for an unknown id.
@@ -179,7 +179,7 @@ artifactBaseline(id: string): ClientArtifactBaseline | undefined
 rebuilt(id: string): string | undefined
 
 /**
- * Subscribe to bundle rebuilds; fires only when artifact metadata changes the rev.
+ * Subscribe to revisions published by `rebuilt()`; entry restarts notify graph listeners instead.
  * @param listener - receives the entry id and its new bundle rev.
  * @returns the unsubscriber.
  */
