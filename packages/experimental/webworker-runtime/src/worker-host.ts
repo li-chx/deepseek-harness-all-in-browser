@@ -41,7 +41,7 @@ import {
   DEFAULT_ROOT, IMAGE_EMPTY_DIRECTORIES, IMAGE_HOME_DIRECTORY, IMAGE_MANIFEST_PATH, LOWERING_VERSION,
 } from './image-layout.ts'
 import { parseImageManifest, type ImageManifest } from './image-manifest.ts'
-import { isForgeEntryActive } from './forge/activation.ts'
+import { isForgeEntryActive, isForgeEntryDisabled } from './forge/activation.ts'
 import { createForgeHost, readForgeHostPackages } from './forge/host.ts'
 import type { ForgeInstaller } from './forge/installer.ts'
 import { VirtualExecutableRegistry } from './shell/process/virtual-executables.ts'
@@ -305,7 +305,8 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
         const nativeLoader = ctx.get('loader') as Loader | undefined
         if (nativeLoader === undefined) throw new Error('webworker host: HMR requires the Loader service')
         forge = createForgeHost(mounted, loader, profile.dir, hostPackages, hmr,
-          (id, name) => isForgeEntryActive(nativeLoader, id, name), http.request, clientPackages)
+          (id, name) => isForgeEntryActive(nativeLoader, id, name),
+          (id, name) => isForgeEntryDisabled(nativeLoader, id, name), http.request, clientPackages)
       }
       if (forge !== undefined) {
         unregisterExecutables.push(executables.register(forge.commands.dsh), executables.register(forge.commands.which))

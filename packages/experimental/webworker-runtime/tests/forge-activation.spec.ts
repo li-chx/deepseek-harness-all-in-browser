@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript'
 import { FiberState } from '@deepseek-ai/cordis'
-import { isForgeEntryActive } from '../src/forge/activation.ts'
+import { isForgeEntryActive, isForgeEntryDisabled } from '../src/forge/activation.ts'
 import { MemoryVfs } from '../src/storage/memory.ts'
 import { WorkerModuleLoader } from '../src/module-system/module-loader.ts'
 
@@ -35,4 +35,20 @@ it('executes emitted activation code when the Worker has no runtime enum module'
   expect(activation.isForgeEntryActive({ entries: () => [
     { options: { id: 'hub', name: 'dsh-plugin' }, fiber: { state: FiberState.ACTIVE } },
   ] }, 'hub', 'dsh-plugin')).toBe(true)
+})
+
+
+it('reads native disablement independently of failed fibers and propagates evaluation failures', () => {
+  const entries = [
+    { options: { id: 'disabled', name: 'plugin' }, disabled: true },
+    { options: { id: 'failed', name: 'plugin' }, disabled: false, fiber: { state: FiberState.FAILED } },
+  ]
+  const loader = { entries: () => entries }
+  expect(isForgeEntryDisabled(loader, 'disabled', 'plugin')).toBe(true)
+  expect(isForgeEntryDisabled(loader, 'failed', 'plugin')).toBe(false)
+  expect(isForgeEntryDisabled(loader, 'absent', 'plugin')).toBe(false)
+  expect(isForgeEntryDisabled(loader, 'disabled', 'other')).toBe(false)
+  expect(() => isForgeEntryDisabled({ entries: () => [{
+    options: { id: 'bad', name: 'plugin' }, get disabled(): boolean { throw new Error('disabled expression failed') },
+  }] }, 'bad', 'plugin')).toThrow('disabled expression failed')
 })

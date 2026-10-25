@@ -50,6 +50,8 @@ export interface ForgeInstallerOptions {
   fetch: typeof fetch
   /** Inspect the live Loader entry rather than the last installer result. */
   isEntryActive(id: string, name: string): boolean
+  /** Read native effective disablement; an inactive or missing fiber does not imply disablement. */
+  isEntryDisabled(id: string, name: string): boolean
   /** Preserve unrelated YAML nodes and expressions; absence removes the managed row. */
   editPatch(text: string, id: string, entry: string | undefined): string
 }
@@ -225,11 +227,13 @@ export class ForgeInstaller {
     if (manifest === undefined) return state
     const bundle = this.bundleEntry(manifest)
     const enabled = bundle === undefined || this.bundles(this.profileManifest()).includes(state.name)
-    const active = this.options.isEntryActive(bundle ?? `forge-${state.pluginId}`, state.name)
-    const status = enabled && active && state.status !== 'activation-failed' ? 'active' : !enabled && !active ? 'disabled' : 'activation-failed'
+    const id = bundle ?? `forge-${state.pluginId}`
+    const expectedActive = enabled && !this.options.isEntryDisabled(id, state.name)
+    const active = this.options.isEntryActive(id, state.name)
+    const status = expectedActive && active && state.status !== 'activation-failed' ? 'active' : !expectedActive && !active ? 'disabled' : 'activation-failed'
     const { message, ...rest } = state
     return { ...rest, status, ...(status === 'activation-failed' ? {
-      message: message ?? (enabled ? 'The selected plugin is not active' : 'The deselected plugin is still active'),
+      message: message ?? (expectedActive ? 'The selected plugin is not active' : enabled ? 'The disabled plugin is still active' : 'The deselected plugin is still active'),
     } : {}) }
   }
 
@@ -377,10 +381,13 @@ export class ForgeInstaller {
           if (activation.pending.length || activation.restartReason) {
             throw new ForgeError('activation-failed', JSON.stringify(activation))
           }
-          if (this.options.isEntryActive(bundle ?? `forge-${manifest.plugin.id}`, manifest.plugin.name) !== enabled) {
-            throw new ForgeError('activation-failed', enabled ? 'The selected plugin is not active' : 'The deselected plugin is still active')
+          const id = bundle ?? `forge-${manifest.plugin.id}`
+          const expectedActive = enabled && !this.options.isEntryDisabled(id, manifest.plugin.name)
+          if (this.options.isEntryActive(id, manifest.plugin.name) !== expectedActive) {
+            throw new ForgeError('activation-failed', expectedActive ? 'The selected plugin is not active'
+              : enabled ? 'The disabled plugin is still active' : 'The deselected plugin is still active')
           }
-          result.status = enabled ? 'active' : 'disabled'
+          result.status = expectedActive ? 'active' : 'disabled'
         } catch (error) {
           result.status = 'activation-failed'
           result.message = error instanceof Error ? error.message : String(error)

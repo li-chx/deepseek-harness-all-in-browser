@@ -53,7 +53,7 @@ function fixture() {
     return new Response(files.get(url.split('/').at(-1) ?? '') ?? '', { status: 200 })
   }
   let active = true
-  const installer = new ForgeInstaller({ vfs, modules, isEntryActive: () => active, profileDirectory: '/dsh/home/profiles/web',
+  const installer = new ForgeInstaller({ vfs, modules, isEntryActive: () => active, isEntryDisabled: () => false, profileDirectory: '/dsh/home/profiles/web',
     hostPackages: { '@deepseek-ai/dsh-app-boot': '0.2.1-rc.3' }, fetch: fetcher, editPatch: editForgeProfilePatch,
     hmr: { runExclusive: async operation => operation(), reconcileProfile: async (ids?: readonly string[]) => {
       if (ids === undefined) active = false

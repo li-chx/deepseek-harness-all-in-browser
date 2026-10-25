@@ -40,9 +40,10 @@ function fixture(clientPackages?: Readonly<Record<string, string>>) {
   const warnings: string[] = []
   const required: (readonly string[])[] = []
   let active = true
+  let disabled = false
   let activeOverride: boolean | undefined
   let inspect: () => void = () => {}
-  const installer = new ForgeInstaller({ vfs, modules, isEntryActive: () => activeOverride ?? active, profileDirectory: '/dsh/home/profiles/web', ...clientPackages === undefined ? {} : { clientPackages }, hostPackages: { 'host-lib': '1.0.0' },
+  const installer = new ForgeInstaller({ vfs, modules, isEntryActive: () => activeOverride ?? active, isEntryDisabled: () => disabled, profileDirectory: '/dsh/home/profiles/web', ...clientPackages === undefined ? {} : { clientPackages }, hostPackages: { 'host-lib': '1.0.0' },
     hmr: { runExclusive: async operation => operation(), reconcileProfile: async (ids?: readonly string[]) => {
       required.push(ids ?? [])
       inspect()
@@ -58,6 +59,7 @@ function fixture(clientPackages?: Readonly<Record<string, string>>) {
     },
   })
   return { vfs, modules, installer, artifacts, writes, calls, warnings, required,
+    setDisabled: (value: boolean): void => { disabled = value },
     setActive: (value: boolean): void => { activeOverride = value },
     onReconcile: (callback: () => void): void => { inspect = callback },
     fail: (): void => { fail = true }, recover: (): void => { fail = false } }
@@ -104,11 +106,11 @@ it('resolves two versions by importer and retains a dependency used by another i
 it('rejects the preceding frontend generation before downloading or writing', async () => {
   const f = fixture()
   const { manifest } = plan()
-  manifest.generation = 'dsh-worker-rc2-2'
+  manifest.generation = 'dsh-worker-rc2-3'
   for (const pkg of manifest.packages) {
-    for (const file of pkg.files) file.objectKey = `dsh-worker-rc2-2/objects/${file.sha256}`
+    for (const file of pkg.files) file.objectKey = `dsh-worker-rc2-3/objects/${file.sha256}`
   }
-  expect(f.installer.target().generation).toBe('dsh-worker-rc2-3')
+  expect(f.installer.target().generation).toBe('dsh-worker-rc2-4')
   await expect(f.installer.install(manifest, 'http://forge.local')).rejects.toMatchObject({ code: 'generation-mismatch' })
   expect(f.calls).toEqual([])
   expect(f.writes).toEqual([])
@@ -508,4 +510,87 @@ it('executes a nested published entry beside its resources and reports resource 
   expect(f.vfs.existsSync(publicDirectory)).toBe(false)
   expect(f.writes.slice(beforeRemove)).toEqual(expect.arrayContaining([updatedRoot, publicDirectory]))
   expect(batches.at(-1)?.paths).toEqual(expect.arrayContaining([updatedRoot, publicDirectory]))
+})
+
+
+it.each(['true', 'false', 'null'])('preserves native root overrides with disabled=%s beside the single self insert', async (disabled) => {
+  const f = fixture()
+  const patch = `- id: compaction-basic\n  disabled: ${disabled}\n- insert:\n  - id: native-one\n    name: plugin-one\n    config: { mode: extended }\n- id: agent-preset\n  config: { options: [1, null, false] }\n`
+  const first = publishedPlan('exports.value = 1', patch)
+  for (const pair of first.files) f.artifacts.set(...pair)
+  f.onReconcile(() => {
+    expect(f.vfs.readFileSync('/dsh/home/profiles/web/node_modules/plugin-one/cordis.patch.yml', 'utf8')).toBe(patch)
+  })
+  expect(await f.installer.install(first.manifest, 'http://forge.local')).toMatchObject({ status: 'active' })
+  expect(f.required).toEqual([['native-one']])
+  const immutable = `/dsh/home/profiles/web/plugins/.forge/packages/${first.manifest.plugin.packageId}/cordis.patch.yml`
+  expect(f.vfs.readFileSync(immutable, 'utf8')).toBe(patch)
+  expect(f.vfs.readFileSync('/dsh/home/profiles/web/cordis.patch.yml', 'utf8')).not.toContain('compaction-basic')
+})
+
+it.each([
+  ['- id: base\n', 'must set config or disabled'],
+  ['- id: base\n  name: replacement\n  config: {}\n', 'override field name is not supported'],
+  ['- id: base\n  group: []\n', 'override field group is not supported'],
+  ['- id: base\n  remove: true\n', 'override field remove is not supported'],
+  ['- id: base\n  inject: []\n', 'override field inject is not supported'],
+  ['- id: base\n  disabled: "true"\n', 'disabled must be a literal boolean or null'],
+  ['- id: base\n  disabled: 1\n', 'disabled must be a literal boolean or null'],
+  ['- id: base\n  disabled: {}\n', 'disabled must be a literal boolean or null'],
+  ['- id: base\n  config: { value: .inf }\n', 'finite numbers'],
+  ['- id: base\n  config: !!js ({})\n', 'unsupported tags'],
+  ['- id: base\n  disabled: !!js true\n', 'unsupported tags'],
+  ['- id: base\n  config: { original: &value [], copy: *value }\n', 'YAML aliases'],
+  ['- id: base\n  disabled: true\n- id: base\n  config: null\n', 'override id base is duplicated'],
+  ['- id: native-one\n  disabled: true\n', 'cannot override its own inserted entry'],
+])('rejects invalid root override before writes: %s', async (override, message) => {
+  const f = fixture()
+  const first = publishedPlan('exports.value = 1', `${override}- insert:\n  - id: native-one\n    name: plugin-one\n`)
+  for (const pair of first.files) f.artifacts.set(...pair)
+  const operation = f.installer.install(first.manifest, 'http://forge.local')
+  await expect(operation).rejects.toMatchObject({ code: 'unsupported-bundle' })
+  await expect(operation).rejects.toThrow(message)
+  expect(f.writes).toEqual([])
+  expect(f.required).toEqual([])
+  expect(f.installer.installed().plugins).toEqual([])
+})
+
+it('rejects override-only patches without the plugin insertion before writes', async () => {
+  const f = fixture()
+  const first = publishedPlan('exports.value = 1', '- id: base\n  disabled: true\n')
+  for (const pair of first.files) f.artifacts.set(...pair)
+  await expect(f.installer.install(first.manifest, 'http://forge.local')).rejects.toThrow('must contain exactly one insert')
+  expect(f.writes).toEqual([])
+})
+
+
+it('reports native override disablement without treating an enabled but inactive entry as disabled', async () => {
+  const f = fixture()
+  const first = publishedPlan()
+  for (const pair of first.files) f.artifacts.set(...pair)
+  await f.installer.install(first.manifest, 'http://forge.local')
+  f.setDisabled(true)
+  f.setActive(false)
+  expect(f.installer.installed().plugins[0]?.status).toBe('disabled')
+  expect(await f.installer.install(first.manifest, 'http://forge.local')).toMatchObject({ status: 'disabled' })
+  expect(f.required.at(-1)).toEqual(['native-one'])
+  expect(JSON.parse(f.vfs.readFileSync('/dsh/home/profiles/web/package.json', 'utf8') as string)).toMatchObject({
+    dsh: { profile: { bundles: ['plugin-one'] } },
+  })
+  f.setDisabled(false)
+  expect(f.installer.installed().plugins[0]?.status).toBe('activation-failed')
+  expect(await f.installer.install(first.manifest, 'http://forge.local')).toMatchObject({
+    status: 'activation-failed', message: 'The selected plugin is not active',
+  })
+})
+
+it('rejects native disablement that leaves an active entry running', async () => {
+  const f = fixture()
+  const first = publishedPlan()
+  for (const pair of first.files) f.artifacts.set(...pair)
+  f.setDisabled(true)
+  f.setActive(true)
+  expect(await f.installer.install(first.manifest, 'http://forge.local')).toMatchObject({
+    status: 'activation-failed', message: 'The disabled plugin is still active',
+  })
 })

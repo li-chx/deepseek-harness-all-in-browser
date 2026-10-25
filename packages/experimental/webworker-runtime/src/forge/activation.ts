@@ -19,3 +19,16 @@ export function isForgeEntryActive(loader: { entries(): Iterable<EntryState> }, 
   return [...loader.entries()].some(entry => entry.options.id === id
     && entry.options.name === name && entry.fiber?.state === ACTIVE_FIBER_STATE)
 }
+
+
+/** Read the matching entry's effective disabled state, including disabled ancestors.
+ * @param loader Native Loader registry owned by this Worker.
+ * @param id Profile entry id, before the enclosing include prefix.
+ * @param name Exact module reference declared by the profile.
+ * @returns True only for a matching disabled entry; disabled-expression errors propagate.
+ */
+export function isForgeEntryDisabled(
+  loader: { entries(): Iterable<EntryState & { readonly disabled: boolean }> }, id: string, name: string,
+): boolean {
+  return [...loader.entries()].some(entry => entry.options.id === id && entry.options.name === name && entry.disabled)
+}

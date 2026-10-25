@@ -38,6 +38,7 @@ export function readForgeHostPackages(vfs: MemoryVfs, root: string): Readonly<Re
  * @param hostPackages Immutable package roster captured before boot.
  * @param hmr Existing profile reconciliation service.
  * @param isEntryActive Reads the native Loader entry activation state.
+ * @param isEntryDisabled Reads native effective entry disablement, independently of fiber activation.
  * @param fetcher Host-owned outbound HTTP.
  * @param clientPackages Trusted page-shared versions; omission declares none.
  * @returns Installer and its Fetch route adapter.
@@ -45,10 +46,11 @@ export function readForgeHostPackages(vfs: MemoryVfs, root: string): Readonly<Re
 export function createForgeHost(vfs: MemoryVfs, modules: WorkerModuleLoader, profileDirectory: string,
   hostPackages: Readonly<Record<string, string>>, hmr: Pick<Hmr, 'runExclusive' | 'reconcileProfile'>,
   isEntryActive: (id: string, name: string) => boolean,
+  isEntryDisabled: (id: string, name: string) => boolean,
   fetcher: HttpFetch = (input, init) => fetch(input, init),
   clientPackages: Readonly<Record<string, string>> = {},
 ): { installer: ForgeInstaller; commands: ForgeCommands; fetch: (request: Request) => Promise<Response> } {
-  const installer = new ForgeInstaller({ vfs, modules, profileDirectory, hostPackages, clientPackages, hmr, isEntryActive,
+  const installer = new ForgeInstaller({ vfs, modules, profileDirectory, hostPackages, clientPackages, hmr, isEntryActive, isEntryDisabled,
     fetch: fetcher, editPatch: editForgeProfilePatch })
   const commands = new ForgeCommands(installer, basename(profileDirectory), fetcher)
   return {
