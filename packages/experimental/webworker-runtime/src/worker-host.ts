@@ -336,7 +336,11 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
         if (!((path === '/__storage/status' && request.method === 'GET') || (path === '/__storage/flush' && request.method === 'POST'))) {
           return Response.json({ error: { code: 'method-not-allowed', message: 'Unsupported storage operation' } }, { status: 405 })
         }
-        if (path === '/__storage/flush') await persistence?.flush()
+        if (path === '/__storage/flush' && persistence !== undefined) {
+          const sessions = ctx.get('sessionPersistence') as { flush(): Promise<void> } | undefined
+          await sessions?.flush()
+          await persistence.flush()
+        }
         return Response.json(persistence?.status() ?? { kind: 'disabled' })
       }
       localRoutes.set('/__storage/status', storageFetch)

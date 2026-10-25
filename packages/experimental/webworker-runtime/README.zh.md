@@ -47,7 +47,7 @@ kind: "package-library"
 <a id="browser-persistence"></a>
 ## 浏览器持久化
 
-Forge 预览默认启用 IndexedDB 存储；`?storage=none` 选择临时 Worker，不清除已保存的数据。页面顶部工具栏报告待保存、已保存或失败状态，并提供显式保存操作。已保存表示存储事务已完成；同步文件系统写入成功本身不确认持久化。页面卸载不作为保存保证。写入保存后，刷新页面会在 Cordis 启动前恢复插件安装、原生启停选择、配置、Session 文件和工作区文件。
+预览在加载存储 UI 模块前建立 shell 启动屏障；shell 等待 Worker 注入完成后才读取模块加载器入口。Forge 预览默认启用 IndexedDB 存储；`?storage=none` 选择临时 Worker，不清除已保存的数据。页面顶部工具栏报告文件系统的待保存、已保存或失败状态。显式保存操作先通过已挂载的 Session 持久化服务排空缓冲事件，再等待浏览器存储；Session 刷新失败会停止确认。自动文件系统状态本身不确认该服务仍在缓冲的事件。已保存表示存储事务已完成；同步文件系统写入成功本身不确认持久化。页面卸载不作为保存保证。写入保存后，刷新页面会在 Cordis 启动前恢复插件安装、原生启停选择、配置、Session 文件和工作区文件。
 
 `VfsPersistenceController` 将 VFS mutation sink 接入可替换的 `VfsPersistenceProvider`。仅 `home/` 和 `workspace/` 下的运行时变更进入存储；基础镜像模块与未修改的模板文件仍由静态镜像提供。`IndexedDbVfsProvider` 分开存储节点元数据和 64 KiB 文件块。后续追加只写变化的尾块及新增块，删除记录则确保从基础镜像重建时不会复活已删除文件。权限与已记录的修改时间会恢复；硬链接的 inode 身份不跨 Worker 生命周期保留。Session 日志格式不变。恢复仍会在 RAM 中重建这些文件；此提供者不会将 VFS 改为磁盘后端。正在执行的请求、插件变量和临时 DOM 修改不会恢复。
 
