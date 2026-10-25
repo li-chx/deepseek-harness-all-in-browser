@@ -21,6 +21,7 @@ import * as net from '../../src/node/builtin_modules/mock/net.ts'
 import * as sqlite from '../../src/node/builtin_modules/mock/sqlite.ts'
 import * as stream from '../../src/node/builtin_modules/implemented/stream.ts'
 import * as vm from '../../src/node/builtin_modules/mock/vm.ts'
+import * as v8 from '../../src/node/builtin_modules/optional/v8.ts'
 import * as workerThreads from '../../src/node/builtin_modules/mock/worker_threads.ts'
 import * as nodePty from '../../src/node/external_packages/node-pty.ts'
 import * as libreofficeKit from '../../src/node/external_packages/libreoffice-kit.ts'
@@ -44,6 +45,7 @@ const quiet = (): void => { vi.spyOn(console, 'error').mockImplementation(() => 
 const CALLED: [string, Record<string, unknown>, readonly string[]][] = [
   ['node:dns', dns, ['lookup', 'setDefaultResultOrder', 'getDefaultResultOrder']],
   ['node:dns/promises', dnsPromises, ['lookup']],
+  ['node:v8', v8, ['getHeapStatistics']],
   ['node:https', https, ['createServer']],
   ['node:net', net, ['createServer', 'connect']],
   ['node:sqlite', sqlite, ['backup']],

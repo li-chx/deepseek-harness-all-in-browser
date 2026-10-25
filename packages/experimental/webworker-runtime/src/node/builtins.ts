@@ -28,6 +28,7 @@ import * as nodeAsyncHooks from './builtin_modules/implemented/async_hooks.ts'
 import * as nodeBuffer from './builtin_modules/implemented/buffer.ts'
 import * as nodeCrypto from './builtin_modules/implemented/crypto.ts'
 import * as nodeDns from './builtin_modules/optional/dns.ts'
+import * as nodeV8 from './builtin_modules/optional/v8.ts'
 import * as nodeDnsPromises from './builtin_modules/optional/dns/promises.ts'
 import * as nodeEvents from './builtin_modules/implemented/events.ts'
 import * as nodeFs from './builtin_modules/implemented/fs.ts'
@@ -95,6 +96,7 @@ const BUILTINS: Record<string, StaticModuleFactory> = {
   url: () => nodeUrl,
   util: () => nodeUtil,
   'util/types': () => nodeUtilTypes,
+  v8: () => nodeV8,
   vm: () => nodeVm,
   worker_threads: () => nodeWorkerThreads,
   zlib: () => nodeZlib,

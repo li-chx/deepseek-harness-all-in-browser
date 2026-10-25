@@ -66,6 +66,8 @@ export const MODULE_PROXIES: Record<string, string> = {
   'dns': './node/builtin_modules/optional/dns.ts',
   'node:dns/promises': './node/builtin_modules/optional/dns/promises.ts',
   'dns/promises': './node/builtin_modules/optional/dns/promises.ts',
+  'node:v8': './node/builtin_modules/optional/v8.ts',
+  'v8': './node/builtin_modules/optional/v8.ts',
   // Structural mocks remain excluded from Forge plugin admission.
   'node:net': './node/builtin_modules/mock/net.ts',
   'node:stream': './node/builtin_modules/implemented/stream.ts',
