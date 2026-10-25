@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { TunnelOutboundFrame } from '../../src/transport/frames.ts'
-import { TunnelServer, type TunnelSeams } from '../../src/transport/tunnel.ts'
+import { SYNTHETIC_HOST, TunnelServer, type TunnelSeams } from '../../src/transport/tunnel.ts'
 
 function bytes(...values: number[]): Uint8Array<ArrayBuffer> {
   const data = new Uint8Array(new ArrayBuffer(values.length))
@@ -63,6 +63,35 @@ describe('worker tunnel unary authentication', () => {
     if (frame?.t !== 'res' || frame.body === undefined) throw new Error('direct retry did not return one body')
     expect(new TextDecoder().decode(frame.body)).toBe('direct answer')
     expect(directFetch).toHaveBeenCalledOnce()
+  })
+})
+
+describe('worker tunnel request origin', () => {
+  it.each([
+    { origin: 'https://preview.example', status: 200, mapped: `http://${SYNTHETIC_HOST}` },
+    { origin: 'https://foreign.example', status: 403, mapped: 'https://foreign.example' },
+  ])('maps only the request origin and retains foreign-origin refusal: $origin', async ({ origin, status, mapped }) => {
+    const frames: TunnelOutboundFrame[] = []
+    const received = Promise.withResolvers<{ url: string; headers: Record<string, string>; body: string }>()
+    const server = new TunnelServer({
+      port: { postMessage: (frame) => { frames.push(frame) } },
+      requestListener: () => Promise.resolve(async (request, response) => {
+        const req = request as AsyncIterable<Uint8Array> & { url: string; headers: Record<string, string> }
+        const res = response as { writeHead(status: number): void; end(body: string): void }
+        const chunks: string[] = []
+        for await (const chunk of req) chunks.push(new TextDecoder().decode(chunk))
+        received.resolve({ url: req.url, headers: req.headers, body: chunks.join('') })
+        res.writeHead(new URL(req.headers.origin!).host === req.headers.host ? 200 : 403)
+        res.end('origin checked')
+      }),
+    })
+    server.serve(seams(async () => (async function *(): AsyncGenerator { yield undefined })()))
+    server.handleMessage({ t: 'req', id: 81, method: 'POST', url: 'https://preview.example/dsh-plugin-hub/probe?test=1',
+      headers: { origin, 'x-probe': 'kept' }, body: new TextEncoder().encode('{}').buffer })
+    expect(await received.promise).toEqual({ url: '/dsh-plugin-hub/probe?test=1',
+      headers: { origin: mapped, host: SYNTHETIC_HOST, 'x-probe': 'kept' }, body: '{}' })
+    await vi.waitFor(() => { expect(frames).toHaveLength(1) })
+    expect(frames[0]).toMatchObject({ t: 'res', status })
   })
 })
 

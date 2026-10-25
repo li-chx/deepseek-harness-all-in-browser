@@ -22,7 +22,7 @@ import { registerProcess, releaseProcess, signalProcess } from '../../process-ta
 import { startProcess } from '../../../shell/process/host.ts'
 import { hostFileSystem } from '../../../shell/fs-access.ts'
 import { virtualExecutable } from '../../../shell/process/virtual-executables.ts'
-import type { VirtualExecutableExit } from '../../../shell/process/virtual-executables.ts'
+import type { VirtualExecutableRegistry, VirtualExecutableExit } from '../../../shell/process/virtual-executables.ts'
 import { standardPrograms } from '../../../shell/programs/index.ts'
 import type { ShellFileSystem } from '../../../shell/types.ts'
 import { DSH_ROOT } from '../../../storage/paths.ts'
@@ -207,10 +207,11 @@ function shellScriptOf(argv: readonly string[]): string | undefined {
  * @param options - working directory, environment, and stdio dispositions.
  * @returns the running command's handle.
  */
-export function spawn(
+function spawnCommand(
   program: string,
   args: readonly string[] = [],
   options: WorkerSpawnOptions = {},
+  registry?: VirtualExecutableRegistry,
 ): WorkerChildProcess {
   if (typeof program !== 'string' || program === '') {
     // Node refuses a non-string command with this error rather than starting
@@ -269,9 +270,13 @@ export function spawn(
       let commandArgv: readonly string[] = argv
       let filesystem: ShellFileSystem | undefined
       let missingExecutable: VirtualExecutableExit | undefined
-      const executable = virtualExecutable(program)
+      const executable = registry?.resolve(program) ?? virtualExecutable(program)
       if (executable !== undefined) {
-        const prepared = await executable.prepare(args, { cwd, filesystem: hostFileSystem() })
+        const controller = new AbortController()
+        entry.process = { interrupt: () => { controller.abort() }, destroy: () => { controller.abort() } }
+        if (entry.signal !== undefined) controller.abort()
+        const prepared = await executable.prepare(args, { cwd, filesystem: hostFileSystem(),
+          signal: controller.signal, env: environmentOf(options.env), output: emit })
         if (prepared.kind === 'exit') {
           emit('stdout', prepared.stdout)
           emit('stderr', prepared.stderr)
@@ -313,6 +318,7 @@ export function spawn(
         else entry.process.interrupt()
       }
     })().catch((error: unknown) => {
+      if (entry.signal !== undefined) { settle(1); return }
       failSpawn(error instanceof Error ? error : new Error(String(error)))
     })
   })
@@ -320,14 +326,24 @@ export function spawn(
   return child
 }
 
+/** Start an argv through the default Worker command set.
+ * @param program Executable name.
+ * @param args Argument vector; defaults to empty.
+ * @param options Process options; defaults to piped streams and ambient cwd/env.
+ * @returns Running child facade.
+ */
+export function spawn(program: string, args: readonly string[] = [], options: WorkerSpawnOptions = {}): WorkerChildProcess {
+  return spawnCommand(program, args, options)
+}
+
 /** The result shape `spawnSync` returns, holding only the members consumers read. */
-export interface WorkerSpawnSyncResult {
+export interface WorkerSpawnSyncResult<T extends Buffer | string = Buffer> {
   pid: number
   status: number | null
   signal: NodeJS.Signals | null
-  stdout: Buffer
-  stderr: Buffer
-  output: (Buffer | null)[]
+  stdout: T
+  stderr: T
+  output: (T | null)[]
   /** Why the run did not happen; carries `code` for the callers that classify by it. */
   error?: NodeJS.ErrnoException
 }
@@ -343,9 +359,9 @@ export interface WorkerSpawnSyncResult {
  * @param args - arguments passed to the virtual launcher probe.
  * @returns the Node-shaped synchronous result carrying the failure.
  */
-export function spawnSync(program: string, args: readonly string[] = []): WorkerSpawnSyncResult {
+function spawnSyncCommand(program: string, args: readonly string[] = [], registry?: VirtualExecutableRegistry): WorkerSpawnSyncResult {
   const empty = Buffer.alloc(0)
-  const executable = virtualExecutable(program)
+  const executable = registry?.resolve(program) ?? virtualExecutable(program)
   if (executable !== undefined) {
     const result = executable.runSync(args)
     if (result.kind === 'asynchronous') {
@@ -360,6 +376,77 @@ export function spawnSync(program: string, args: readonly string[] = []): Worker
     ? new Error(`${MODULE}.spawnSync cannot run ${program} in the worker host: commands run asynchronously`)
     : spawnEnoent(program)
   return { pid: -1, status: null, signal: null, stdout: empty, stderr: empty, output: [null, empty, empty], error }
+}
+
+/** Options consumed by local synchronous executable probes. */
+export interface WorkerSpawnSyncOptions extends WorkerSpawnOptions {
+  /** Omitted, null, or buffer returns bytes; a supported text encoding returns strings. */
+  encoding?: BufferEncoding | 'buffer' | null
+  /** Accepted for Node callers; local probes complete synchronously without a timer. */
+  timeout?: number
+  /** Accepted for Node callers; probes always address an explicit registered executable. */
+  shell?: boolean
+}
+
+function encodedProbe(
+  program: string, args: readonly string[], options: WorkerSpawnSyncOptions, registry?: VirtualExecutableRegistry,
+): WorkerSpawnSyncResult<Buffer | string> {
+  const encoding = options.encoding
+  if (encoding !== undefined && encoding !== null && encoding !== 'buffer' && !Buffer.isEncoding(encoding)) {
+    throw Object.assign(new TypeError(`Unknown encoding: ${String(encoding)}`), { code: 'ERR_UNKNOWN_ENCODING' })
+  }
+  const result = spawnSyncCommand(program, args, registry)
+  if (encoding === undefined || encoding === null || encoding === 'buffer') return result
+  const stdout = result.stdout.toString(encoding)
+  const stderr = result.stderr.toString(encoding)
+  return { ...result, stdout, stderr, output: [null, stdout, stderr] }
+}
+
+/** Run a local synchronous probe; remote commands report asynchronous capability.
+ * @param program Executable name.
+ * @param args Probe arguments; defaults to empty.
+ * @param options Output encoding and accepted Node options; omission returns Buffer output.
+ * @returns Probe result without remote execution.
+ */
+export function spawnSync(
+  program: string, args: readonly string[], options: WorkerSpawnSyncOptions & { encoding: BufferEncoding },
+): WorkerSpawnSyncResult<string>
+/** Run a local probe with Buffer output.
+ * @param program Executable name.
+ * @param args Probe arguments; defaults to empty.
+ * @param options Accepted Node options; omitted encoding preserves Buffer output.
+ * @returns Probe result without remote execution.
+ */
+export function spawnSync(
+  program: string, args?: readonly string[], options?: WorkerSpawnSyncOptions & { encoding?: 'buffer' | null },
+): WorkerSpawnSyncResult
+/** Run a local probe with runtime-selected output encoding.
+ * @param program Executable name.
+ * @param args Probe arguments.
+ * @param options Output encoding and accepted Node options.
+ * @returns Probe result with Buffer or string output according to the encoding.
+ */
+export function spawnSync(program: string, args: readonly string[], options: WorkerSpawnSyncOptions): WorkerSpawnSyncResult<Buffer | string>
+export function spawnSync(
+  program: string, args: readonly string[] = [], options: WorkerSpawnSyncOptions = {},
+): WorkerSpawnSyncResult<Buffer | string> {
+  return encodedProbe(program, args, options)
+}
+
+function scopedSynchronousSpawner(registry: VirtualExecutableRegistry): typeof spawnSync {
+  function scoped(
+    program: string, args: readonly string[], options: WorkerSpawnSyncOptions & { encoding: BufferEncoding },
+  ): WorkerSpawnSyncResult<string>
+  function scoped(
+    program: string, args?: readonly string[], options?: WorkerSpawnSyncOptions & { encoding?: 'buffer' | null },
+  ): WorkerSpawnSyncResult
+  function scoped(program: string, args: readonly string[], options: WorkerSpawnSyncOptions): WorkerSpawnSyncResult<Buffer | string>
+  function scoped(
+    program: string, args: readonly string[] = [], options: WorkerSpawnSyncOptions = {},
+  ): WorkerSpawnSyncResult<Buffer | string> {
+    return encodedProbe(program, args, options, registry)
+  }
+  return scoped
 }
 
 /** Callback `exec` and `execFile` report through. */
@@ -411,8 +498,10 @@ export function execFile(
 }
 
 /** Shared body of `exec` and `execFile`: spawn, collect both streams, then report. */
-function execute(argv: readonly string[], options: WorkerSpawnOptions, callback: ExecCallback | undefined): WorkerChildProcess {
-  const child = spawn(argv[0] as string, argv.slice(1), { ...options, stdio: 'pipe' })
+function execute(
+  argv: readonly string[], options: WorkerSpawnOptions, callback: ExecCallback | undefined, registry?: VirtualExecutableRegistry,
+): WorkerChildProcess {
+  const child = spawnCommand(argv[0] as string, argv.slice(1), { ...options, stdio: 'pipe' }, registry)
   let stdout = ''
   let stderr = ''
   child.stdout?.on('data', (chunk: unknown) => { stdout += String(chunk) })
@@ -449,4 +538,25 @@ type NodeFace = Partial<Omit<typeof import('node:child_process'), 'spawn' | 'spa
   & Record<'spawn' | 'spawnSync' | 'exec' | 'execFile', unknown>
 
 /** CommonJS default export: the members `require()` hands a caller of this module. */
-export default { spawn, spawnSync, exec, execFile, execFileSync, execSync, fork } satisfies NodeFace
+const defaultModule = { spawn, spawnSync, exec, execFile, execFileSync, execSync, fork } satisfies NodeFace
+export default defaultModule
+
+/** Bind child-process spawning to one host's executable registrations.
+ * @param registry Lifecycle-owned executable capabilities.
+ * @returns Stable module instance served by that host's module loader.
+ */
+export function createChildProcessFacade(
+  registry: VirtualExecutableRegistry,
+): typeof defaultModule & { __esModule: true; default: typeof defaultModule } {
+  const module: typeof defaultModule = { ...defaultModule,
+    spawn: (program, args, options) => spawnCommand(program, args, options, registry),
+    spawnSync: scopedSynchronousSpawner(registry),
+    execFile: (program, args, options, callback) => {
+      const argv = Array.isArray(args) ? [program, ...args as string[]] : [program]
+      const shifted = Array.isArray(args) ? options : args as WorkerSpawnOptions | ExecCallback | undefined
+      const settled = execArguments(shifted, typeof options === 'function' ? options : callback)
+      return execute(argv, settled.options, settled.callback, registry)
+    },
+  }
+  return { ...module, __esModule: true, default: module }
+}

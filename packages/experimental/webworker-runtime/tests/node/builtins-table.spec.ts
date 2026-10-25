@@ -134,7 +134,7 @@ describe('module identity through the loader', () => {
     const require = loaderRequire()
     expect(require.resolve.paths('node:fs')).toBeNull()
     expect(require.resolve.paths('node:dns')).toBeNull()
-    expect(require.resolve.paths('workspace-package')).toEqual(['/dsh/node_modules'])
+    expect(require.resolve.paths('workspace-package')).toEqual(['/dsh/node_modules', '/node_modules'])
     expect(require.resolve.paths('./local.js')).toEqual(['/dsh'])
   })
 })

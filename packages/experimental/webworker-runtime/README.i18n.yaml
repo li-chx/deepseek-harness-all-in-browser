@@ -12,11 +12,17 @@
   en: cfff0da51e5e9bde
   zh: 38e7960b16c77c2c
 /deepseek-ai-dsh-experimental-webworker-runtime/table-of-contents:
-  en: 4e53164159b5ce41
-  zh: 89582dc0294d0776
+  en: 8d7f3d33dd3d62a8
+  zh: f69a75e1c34fabc0
 /deepseek-ai-dsh-experimental-webworker-runtime/use-this-package:
-  en: bf1ffe201751acdf
-  zh: d09cdc93702c1838
+  en: 6106f12ef047c073
+  zh: c3c72397da5fbc8a
+/deepseek-ai-dsh-experimental-webworker-runtime/forge-plugin-updates:
+  en: 738a1587d16d22a1
+  zh: e8301fae86912974
+/deepseek-ai-dsh-experimental-webworker-runtime/outbound-http-providers:
+  en: ce648039b7f0a423
+  zh: 5d951b0c7ebd896c
 /deepseek-ai-dsh-experimental-webworker-runtime/model-experience:
   en: 61fce9b4c7dc96e6
   zh: dc2d931063a38327
@@ -24,8 +30,8 @@
   en: ca75c51c89c2c9b0
   zh: 64715dc7e6d02f71
 /deepseek-ai-dsh-experimental-webworker-runtime/known-limitations-and-deferred-work:
-  en: 174390282daa7398
-  zh: aea1c38dc7133ad9
+  en: 13e147e1187c33e1
+  zh: b110ca19d7fad5af
 /deepseek-ai-dsh-experimental-webworker-runtime/known-limitations-and-deferred-work/dev-note:
   en: e67f633dc6fe7773
   zh: e88aeb617ffb74ea

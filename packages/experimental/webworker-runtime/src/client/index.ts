@@ -8,6 +8,8 @@
  * here mounts into a shipped roster.
  * @module @deepseek-ai/dsh-experimental-webworker-runtime/client
  */
+import { serveHttpTransport } from '../transport/http-port.ts'
+import type { HttpTransport } from '../transport/http-transport.ts'
 import { IMAGE_FILE_NAME } from '../image-layout.ts'
 import type { ClientFileUploadHooks } from '@deepseek-ai/dsh-client-file-upload/types'
 import { PREVIEW_FIXTURE_MANIFEST_FILE } from '../fixture-manifest.ts'
@@ -15,6 +17,8 @@ import { WorkerTunnel, type TunnelFetch } from './client.ts'
 import { applyIndexInjections } from './apply-injections.ts'
 import { choosePreviewSource } from './source-chooser.ts'
 
+export { serveHttpTransport, PortHttpTransport } from '../transport/http-port.ts'
+export { WorkerHttpTransport, type HttpTransport, type HttpFetch } from '../transport/http-transport.ts'
 export { WorkerTunnel, type TunnelFetch } from './client.ts'
 export { applyIndexInjections } from './apply-injections.ts'
 export { IMAGE_FILE_NAME } from '../image-layout.ts'
@@ -46,6 +50,8 @@ interface ClientFileUploadGlobal {
 
 /** Inputs for {@link connectWorkerHost}. */
 export interface WorkerHostConnectOptions {
+  /** Page-owned outbound HTTP provider, reached through a dedicated port with streaming and abort frames. */
+  readonly httpTransport?: HttpTransport
   /**
    * VFS image URL, the one deployment-shaped input. Defaults to
    * {@link IMAGE_FILE_NAME} beside the page; a deployment that packs the
@@ -73,6 +79,8 @@ export interface WorkerHostSource {
 /** A page connected to a worker-hosted harness, ready to run a shell entry. */
 export interface WorkerHostConnection {
   readonly worker: Worker
+  /** Abort and detach the optional page HTTP provider; Worker and tunnel ownership stay with the caller. */
+  disposeHttp(): void
   readonly tunnel: WorkerTunnel
   /** Bundle transport for the shell's boot seam. */
   loadBundle(url: string): Promise<void>
@@ -147,11 +155,19 @@ export async function connectWorkerHost(worker: Worker, options?: WorkerHostConn
   // The handshake may fail before any entry awaits the promise; this no-op
   // subscription keeps that from surfacing as an unhandled rejection.
   void ready.promise.catch(() => {})
+  let releaseHttp: (() => void) | undefined
   try {
+    let httpPort: MessagePort | undefined
+    if (options?.httpTransport !== undefined) {
+      const channel = new MessageChannel()
+      releaseHttp = serveHttpTransport(channel.port1, options.httpTransport)
+      httpPort = channel.port2
+    }
     const tunnel = new WorkerTunnel(worker)
     tunnel.init(
       new URL(options?.image ?? IMAGE_FILE_NAME, document.baseURI).href,
       (options?.overlays ?? []).map(overlay => new URL(overlay, document.baseURI).href),
+      httpPort,
     )
     const payload = await tunnel.bootPayload()
     ;(globalThis as ClientTransportGlobal).__DSH_TRANSPORT__ = {
@@ -167,8 +183,9 @@ export async function connectWorkerHost(worker: Worker, options?: WorkerHostConn
     }
     await applyIndexInjections(payload.injections, src => tunnel.loadBundle(src))
     ready.resolve()
-    return { worker, tunnel, loadBundle: (url: string) => tunnel.loadBundle(url) }
+    return { worker, tunnel, disposeHttp: () => { releaseHttp?.() }, loadBundle: (url: string) => tunnel.loadBundle(url) }
   } catch (reason) {
+    releaseHttp?.()
     ready.reject(reason)
     throw reason
   }

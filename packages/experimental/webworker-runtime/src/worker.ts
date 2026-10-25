@@ -13,6 +13,7 @@
 // Straight to the assembly, not through the package barrel: the barrel also
 // publishes the pack-time transform, whose acorn dependency would then be bundled
 // into this worker — which never parses JavaScript.
+import { PortHttpTransport } from './transport/http-port.ts'
 import { createWorkerHost } from './worker-host.ts'
 import './node/builtin_modules/implemented/buffer.ts'
 import { alsCausality, runAtAsyncContextRoot } from './node/builtin_modules/implemented/async_hooks.ts'
@@ -55,7 +56,10 @@ self.addEventListener('message', (event: MessageEvent) => {
     if (!Array.isArray(data.overlays) || data.overlays.some(overlay => typeof overlay !== 'string')) {
       throw new Error('webworker: init frame needs an array of string overlay urls')
     }
+    if (data.httpPort !== undefined && !(data.httpPort instanceof MessagePort)) throw new Error('webworker: invalid HTTP provider port')
+    const httpTransport = data.httpPort instanceof MessagePort ? new PortHttpTransport(data.httpPort) : undefined
     const created = createWorkerHost({
+      ...httpTransport === undefined ? {} : { httpTransport },
       staticModules: createNodeBuiltins(),
       staticModulePrefixes: REPLACED_PREFIXES,
       requestListener: whenRequestListener,
@@ -68,7 +72,9 @@ self.addEventListener('message', (event: MessageEvent) => {
       runAtAsyncContextRoot(() => { created.handleMessage(queued) })
     }
     pending.length = 0
-    created.start().catch(() => {
+    created.start().catch((error: unknown) => {
+      httpTransport?.close()
+      void error
       // start() already reported the failure to the page through tunnel.fail;
       // nothing else can reach this rejection, so only the duplicate
       // unhandled-rejection noise is dropped here.

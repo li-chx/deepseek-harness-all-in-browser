@@ -14,6 +14,8 @@ The browser worker host: the whole harness plugin tree runs inside one dedicated
 ## Table of Contents
 
 - [Use this package](#use-this-package)
+- [Forge plugin updates](#forge-plugin-updates)
+- [Outbound HTTP providers](#outbound-http-providers)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
 - [Dev Note](#dev-note)
@@ -39,7 +41,33 @@ The [built-bundle import sweep](tests/compile/transform-corpus-check.ts) checks 
 
 -----
 
+<a id="forge-plugin-updates"></a>
+## Forge plugin updates
+
+The optional preview control opens with `?forge=<HTTP service URL>`. **DSH Forge** submits TypeScript Host plugin sources or an npm package specification to that service and applies its compiled manifest through the running Worker. The frontend embeds `FORGE_GENERATION`; the service must target that generation and the base image's exact host package versions. Core packages and shared host modules remain owned by the frontend build. The target separately declares `clientPackages`, captured from the trusted base image before overlays; these exact page-shared versions satisfy Client requirements without granting Host imports. Missing or mismatched Client requirements and attempts to replace shared Client packages fail before file writes. Published packages with a supported single-entry `dsh.bundle` patch can carry their existing Client bundle; package metadata and assets enter the normal Client graph and HMR path.
+
+The installer verifies the complete manifest, supported bundle patch and missing artifact bytes before changing files. Published bundles use the profile’s native `dsh.profile.bundles` selection and their original patch ids; updates remove any legacy Forge registration, so native controls and Forge share one instance. Updates preserve a native disabled selection and report `disabled`; installed-state queries read the current selection and live Loader entry. Plugins without bundle metadata use a Forge-owned profile patch row. Unrelated profile fields and patch rows remain intact.
+
+Importer-specific package mappings support separate dependency versions without filesystem symlinks. A stable entry wrapper references the current immutable package, letting Cordis HMR detect the file change. Reconciliation requires the selected bundle’s actual entry id and confirms live activation. Failures retain package files and their diagnostics without promising restoration of the previous instance. Removal deselects and unloads the plugin before collecting unshared files; failed unloading retains its dependency and files.
+
+The configured Worker exposes a profile-scoped virtual `dsh plugin --profile <profile> add|update|remove <npm-package>` command through `node:child_process`. Installation waits for Forge compilation, verified file application and Host reconciliation before reporting success. Synchronous calls can inspect local command/version metadata but cannot perform remote work. The preview forwards same-origin `/api/` and `/dsh-plugin-hub` Fetch requests to the Worker, including published plugins that call Host routes directly. Query strings, method, headers, body and cancellation are preserved; a same-origin Origin header is translated with the synthetic Host. Static assets, foreign origins and similar path names use the previous page Fetch. Route errors never retry against the static server. Synthetic requests share one Node-compatible Readable body across async iteration and `data`/`end`/`error` listeners; `setEncoding()` retains split character sequences. Aborting the exchange or completing its response cancels unread input.
+
+Every file change uses ordinary VFS mutations. `ForgeInstaller.subscribe()` adds batch notifications for application and activation, while VFS subscribers observe individual writes and removals. Neither notification confirms durable storage. Forge mirrors installed root packages under the profile’s `node_modules`; `createRequire(anchor).resolve.paths()` exposes the anchor’s ancestor package directories so the standard bundle inventory discovers them without requiring a `./package.json` export. Installation state belongs to this Worker lifetime; refreshing the page discards it. The [installer](src/forge/installer.ts) owns these operations and the [protocol validator](src/forge/protocol.ts) owns manifest admission.
+
+-----
+
 <a id="model-experience"></a>
+
+## Outbound HTTP providers
+
+`createWorkerHost({ httpTransport })` accepts an instance-owned provider with `fetch(request: Request): Promise<Response>`. It serves image and lazy-archive downloads, Forge builds and artifacts, virtual `curl`, `node:https.get`, and VFS-module Fetch calls, including model providers and plugin `globalThis.fetch`. Omitting it uses platform Fetch. Module global aliases resolve to the same per-loader proxy; the real Worker global is unchanged. This is dependency injection, not a sandbox for untrusted JavaScript.
+
+For a provider implemented on the page, pass it to `connectWorkerHost(worker, { httpTransport })`. A dedicated MessageChannel transfers request/response fields and ReadableStreams, and relays cancellation; functions stay on the page. Transfer failures and opaque responses fail explicitly rather than being buffered. The returned `disposeHttp()` aborts and detaches this provider; the caller retains Worker and tunnel ownership. Direct Worker embeddings own their provider's disposal and call `host.stop()` to abort active HTTP. Providers must honor `Request.signal`, including pending response bodies; host shutdown also cancels unread response streams.
+
+Pass the same provider as the third argument to the preview's `mountForgePreview(serverUrl, hostFetch, httpTransport)` so its target and build requests use it too. This does not intercept page-global Fetch, source-chooser requests, browser script/image loading, WebSockets, or code that creates another JavaScript realm. The default provider remains subject to browser CORS; a future native RPC provider can supply its own HTTP implementation without changing plugin request calls.
+
+-----
+
 ## Model Experience
 
 None, as this package only hosts the tree in a browser worker and answers its `node:*` calls; every model-facing registration belongs to the plugins it boots.
@@ -55,9 +83,11 @@ None; this package neither assembles nor sends a provider request.
 - **The worker composition writes plaintext session logs** (`compression: 'none'` in the image's home patch; ConfigEditor rejects edits to that row's config): it carries no Zstandard codec, so exported logs are `.jsonl`, never `.jsonl.zstd`.
 - **`node:dns/promises`, `node:vm`, `node:net`, `node:sqlite`, `node:worker_threads` are structural stubs**: every call reports its refusal on the console and throws with Node's `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` code. Rows needing native DNS, a real process, or realm isolation cannot run here.
 - **`node:assert/strict` supports truthiness assertions only**: for falsy values, the callable default and `ok` throw `ERR_ASSERTION` with the supplied message or generic text, or rethrow a supplied Error unchanged. Other assertion APIs are absent.
+- **Network compatibility uses the configured HTTP provider**: `node:https.get` supports registry metadata responses, and virtual `curl` supports the catalog/probe arguments used by Plugin Hub. The default provider follows browser CORS rules; process proxy settings, custom TLS options and synchronous network requests are unsupported.
+- **Native response prototype patches do not affect the tunnel**: synthetic responses do not inherit `http.ServerResponse.prototype`; plugins that patch it for gzip or Brotli compression leave tunnel responses uncompressed.
 - **Native TLS listeners require a Node Host**: the worker's `node:https.createServer` rejects activation rather than substituting plaintext. The preview's internal HTTP tunnel does not bind sockets; browser-facing HTTPS belongs to its deployment server.
 - **Desktop product telemetry is unavailable**: `got.post` reports an explicit worker-host refusal. Got and its Node HTTP dependencies are excluded from the browser image; Desktop reporting remains disabled in the preview composition.
-- **Host package commands are unavailable**: `execa` reports an explicit worker-host refusal; the preview cannot run pnpm, install plugins, or install native dependencies.
+- **Package commands are limited to Forge plugin operations**: the Worker does not run pnpm, global npm installations, Git installs or arbitrary Node subprocesses. `execa` remains unavailable. [Forge](#forge-plugin-updates) resolves and compiles supported npm plugins on its server.
 - **pi-ai model requests are unavailable**: the replacement exposes a fixed subset of installed provider identifiers with no models, allowing the adapter to register configuration metadata. Its identifiers must stay valid when pi-ai is upgraded; inference entry points report an explicit worker-host refusal.
 - **PTC Node programs are unavailable**: the process shim exposes `/dsh/bin/node` as its executable identity so the provider can activate, but the Worker has neither a Node executable nor `stripTypeScriptTypes`. Program execution fails before launching a child.
 - **Office conversion requires a Node Host**: the LibreOffice kit replacement rejects converter creation with `unavailable`. The browser image excludes the kit and its engine dependencies; the Office preview reports that conversion is unavailable.

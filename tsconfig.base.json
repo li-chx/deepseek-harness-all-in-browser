@@ -323,6 +323,7 @@
       "@deepseek-ai/dsh-client-ui-plugin-market": ["./packages/client/ui-plugin-market/src"],
       "@deepseek-ai/dsh-client-ui-settings-plugin-inventory": ["./packages/client/ui-settings-plugin-inventory/src"],
       "@deepseek-ai/dsh-client-locale": ["./packages/client/locale/src"],
+      "@deepseek-ai/dsh-client-web/platform": ["./packages/client/web/src/platform.ts"],
       "@deepseek-ai/dsh-client-web/injections": ["./packages/client/web/src/apply-injections.ts"],
       "@deepseek-ai/dsh-client-web": ["./packages/client/web/src"],
       "@deepseek-ai/dsh-schedule/client": ["./packages/schedule/schedule/src/client.ts"],

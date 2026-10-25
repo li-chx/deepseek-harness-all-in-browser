@@ -28,6 +28,9 @@
     },
     {
       "path": "../../session/session-format-v3-to-v4"
+    },
+    {
+      "path": "../../client/web"
     }
   ]
 }

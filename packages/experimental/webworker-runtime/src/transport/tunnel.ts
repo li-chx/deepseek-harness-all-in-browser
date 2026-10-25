@@ -89,6 +89,8 @@ export interface TunnelSeams {
    * call the route lane refused with 401 or 403.
    */
   readonly directFetch: (request: Request) => Promise<Response>
+  /** Optional Worker-owned routes; absent entries use the application route lane. */
+  readonly localRoutes?: ReadonlyMap<string, (request: Request) => Promise<Response>>
   /** Boot payload for `GET /__boot__`: the structured index injection table. */
   readonly bootPayload: () => unknown
   /** Open one decoded Gateway Remote stream without another network carrier; `uplink` carries the page's items. */
@@ -409,9 +411,13 @@ export class TunnelServer {
   /** The page sends an absolute URL; route handlers read `req.url` as a path. */
   private pathFrame(frame: TunnelRequestFrame): { frame: TunnelRequestFrame; path: string } {
     const url = new URL(frame.url, `http://${SYNTHETIC_HOST}`)
+    const headers = new Headers(frame.headers)
+    // Preserve same-origin identity when translating the page authority to the synthetic Host.
+    // Foreign origins retain their value so route-level checks can reject them.
+    if (headers.get('origin') === url.origin) headers.set('origin', `http://${SYNTHETIC_HOST}`)
+    headers.set('host', SYNTHETIC_HOST)
     return {
-      // The API trust fence reads `host`, which the page cannot set itself.
-      frame: { ...frame, url: `${url.pathname}${url.search}`, headers: { ...frame.headers, host: SYNTHETIC_HOST } },
+      frame: { ...frame, url: `${url.pathname}${url.search}`, headers: Object.fromEntries(headers) },
       path: url.pathname,
     }
   }
@@ -421,6 +427,8 @@ export class TunnelServer {
     try {
       const { frame: routed, path } = this.pathFrame(frame)
       if (path === '/__boot__') {  this.serveBoot(frame, sink); return }
+      const local = this.seams?.localRoutes?.get(path)
+      if (local !== undefined) { await this.serveDirect(frame, sink, local); return }
       if (path.startsWith(`${API_PREFIX}/`)) {  await this.serveApi(frame, routed, path, sink); return }
       this.dispatch(routed, sink)
     } catch (reason) {
@@ -505,7 +513,7 @@ export class TunnelServer {
     })
   }
 
-  private async serveDirect(frame: TunnelRequestFrame, sink: ResponseSink): Promise<void> {
+  private async serveDirect(frame: TunnelRequestFrame, sink: ResponseSink, local?: (request: Request) => Promise<Response>): Promise<void> {
     if (this.seams === undefined) throw new Error('webworker tunnel: direct fetch requested before the host tree is serving')
     const controller = new AbortController()
     this.inFlight.set(frame.id, { abort: () => { controller.abort() } })
@@ -524,7 +532,7 @@ export class TunnelServer {
       body: frame.body === undefined || frame.method === 'GET' || frame.method === 'HEAD' ? null : frame.body,
       signal: controller.signal,
     })
-    const response = await this.seams.directFetch(request)
+    const response = await (local ?? this.seams.directFetch)(request)
     const responseHeaders: Record<string, string> = {}
     response.headers.forEach((value, key) => { responseHeaders[key] = value })
     // Event streams are the only responses the page consumes incrementally;

@@ -4,11 +4,15 @@
  * request listener; the tunnel feeds that listener these pairs, so the real
  * route table, its trust fences, and every handler run unchanged.
  *
+ * Request bodies use the maintained Readable implementation for event listeners,
+ * encoding and async iteration, with one shared consumption cursor.
  * Synthesized members are exactly the ones the route handlers read; anything
  * else is absent on purpose so a new consumer
  * fails loud instead of silently reading a stub.
  * @module @deepseek-ai/dsh-experimental-webworker-runtime/src/transport/synthetic-http
  */
+import { Buffer } from 'buffer'
+import { Readable } from '../node/builtin_modules/implemented/stream.ts'
 import type { TunnelRequestFrame } from './frames.ts'
 
 const encoder = new TextEncoder()
@@ -60,34 +64,52 @@ export function createSyntheticExchange(frame: TunnelRequestFrame, sink: Respons
     for (const callback of [...(listeners.get(event) ?? [])]) callback()
   }
 
-  const req = {
-    url: frame.url,
-    method: frame.method,
-    headers: frame.headers,
-    destroy: (): void => { aborted = true },
-    async *[Symbol.asyncIterator](): AsyncGenerator<Uint8Array> {
-      if (frame.body === undefined) return
-      if (frame.body instanceof Blob) {
-        for await (const chunk of frame.body.stream()) {
-          if (aborted) return
-          if (chunk.byteLength > 0) yield chunk
+  const body = frame.body instanceof Blob ? frame.body.stream() : frame.body
+  const reader = body instanceof ReadableStream ? body.getReader() : undefined
+  let bufferRead = false
+  let reading = false
+  const req = Object.assign(new Readable({
+    highWaterMark: 0,
+    read() {
+      if (reader === undefined) {
+        if (!bufferRead && body instanceof ArrayBuffer && body.byteLength > 0) {
+          bufferRead = true
+          this.push(Buffer.from(body))
         }
+        this.push(null)
         return
       }
-      if (frame.body instanceof ReadableStream) {
-        for await (const chunk of frame.body) {
-          if (aborted) return
-          if (!(chunk instanceof Uint8Array)) {
-            throw new TypeError('webworker tunnel: request stream produced a non-Uint8Array chunk')
-          }
-          if (chunk.byteLength > 0) yield chunk
+      if (reading) return
+      reading = true
+      void reader.read().then((next) => {
+        reading = false
+        if (this.destroyed) return
+        if (next.done) { this.push(null); return }
+        if (!(next.value instanceof Uint8Array)) {
+          this.destroy(new TypeError('webworker tunnel: request stream produced a non-Uint8Array chunk'))
+          return
         }
-        return
-      }
-      if (aborted || frame.body.byteLength === 0) return
-      yield new Uint8Array(frame.body)
+        this.push(Buffer.from(next.value))
+      }, (error: unknown) => {
+        reading = false
+        this.destroy(error instanceof Error ? error : new Error(String(error)))
+      })
     },
-  }
+    destroy(error, done) {
+      if (reader === undefined) { done(error); return }
+      void reader.cancel(error).then(() => { reader.releaseLock(); done(error) }, (cancelError: unknown) => {
+        reader.releaseLock()
+        done(error ?? (cancelError instanceof Error ? cancelError : new Error(String(cancelError))))
+      })
+    },
+  }), { url: frame.url, method: frame.method, headers: frame.headers })
+  req.on('error', (error: unknown) => {
+    // Route consumers own errors they subscribe to, including async iteration.
+    if (finished || req.listenerCount('error') > 1) return
+    finished = true
+    sink.fail(error instanceof Error ? error.message : String(error))
+    emit('close')
+  })
 
   const res: Record<string, unknown> = {
     writeHead: (nextStatus: number, nextHeaders?: Record<string, string | number>): unknown => {
@@ -110,6 +132,7 @@ export function createSyntheticExchange(frame: TunnelRequestFrame, sink: Respons
     end: (body?: string | Uint8Array): unknown => {
       if (finished) return res
       finished = true
+      req.destroy()
       const bytes = body === undefined ? undefined : typeof body === 'string' ? encoder.encode(body) : body
       if (streaming) {
         if (bytes !== undefined) sink.chunk(bytes)
@@ -123,6 +146,7 @@ export function createSyntheticExchange(frame: TunnelRequestFrame, sink: Respons
     destroy: (): void => {
       if (finished) return
       finished = true
+      req.destroy()
       sink.fail(`response destroyed for ${frame.method} ${frame.url}`)
       emit('close')
     },
@@ -151,6 +175,8 @@ export function createSyntheticExchange(frame: TunnelRequestFrame, sink: Respons
       if (finished) return
       aborted = true
       finished = true
+      req.emit('aborted')
+      req.destroy(Object.assign(new Error('Request aborted'), { name: 'AbortError', code: 'ABORT_ERR' }))
       emit('aborted')
       emit('close')
     },

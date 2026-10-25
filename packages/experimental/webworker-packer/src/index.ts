@@ -12,6 +12,6 @@ export {
   type PackOverlayResult, type PackResult,
 } from './pack.ts'
 export {
-  configTrees, describePack, indexWorkspacePackages, installationManifest, packPreviewFixture, packRepositoryImage,
+  clientPlatformPackages, configTrees, describePack, indexWorkspacePackages, installationManifest, packPreviewFixture, packRepositoryImage,
   previewFixtures, profileRoster, type PreviewFixture, type ProfileRoster,
 } from './repository.ts'

@@ -24,6 +24,8 @@ export interface ImageLazyArchive {
 
 /** Fields recorded in the base image's manifest. */
 export interface ImageManifest {
+  /** Exact page-shared package versions; absent means no declared Client platform capabilities. */
+  readonly clientPackages?: Readonly<Record<string, string>>
   /** Virtual root the image was packed for. */
   readonly root: string
   /** Shipped profile template the worker host initializes and boots. */
@@ -77,6 +79,16 @@ export function parseImageManifest(value: unknown, path: string): ImageManifest 
     || !isCount(javascriptEntries) || !isCount(visitedEntries) || !isCount(rewrittenEntries) || !Array.isArray(lazy)) {
     throw new Error(`webworker host: ${path} lacks a valid root, profile, installation, entry count, or lazy archive list`)
   }
+  let clientPackages: Record<string, string> | undefined
+  if (record.clientPackages !== undefined) {
+    const packages = recordOf(record.clientPackages)
+    if (packages === undefined || Object.entries(packages).some(([name, version]) =>
+      !/^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i.test(name)
+      || typeof version !== 'string' || version.length === 0)) {
+      throw new Error(`webworker host: ${path} lists invalid Client platform versions`)
+    }
+    clientPackages = Object.fromEntries(Object.entries(packages).map(([name, version]) => [name, String(version)]))
+  }
   const archives: ImageLazyArchive[] = []
   const archiveNames = new Set<string>()
   const filePaths = new Set<string>()
@@ -102,5 +114,6 @@ export function parseImageManifest(value: unknown, path: string): ImageManifest 
   return {
     root, profile, ...installation === undefined ? {} : { installation }, lowered: LOWERING_VERSION,
     javascriptEntries, visitedEntries, rewrittenEntries, lazy: archives,
+    ...clientPackages === undefined ? {} : { clientPackages },
   }
 }

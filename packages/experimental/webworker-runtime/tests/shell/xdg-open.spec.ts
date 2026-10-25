@@ -25,7 +25,9 @@ async function run(args: readonly string[]): Promise<{ code: number | null; stde
 it('refuses with status 3 before a page viewer is attached', async () => {
   vi.resetModules()
   const fresh = await import('../../src/shell/process/xdg-open.ts')
-  const result = await fresh.XDG_OPEN_EXECUTABLE.prepare([`${PROFILE}/cordis.patch.yml`], { cwd: PROFILE, filesystem: hostFileSystem() })
+  const result = await fresh.XDG_OPEN_EXECUTABLE.prepare([`${PROFILE}/cordis.patch.yml`], {
+    cwd: PROFILE, filesystem: hostFileSystem(), signal: new AbortController().signal, env: {}, output: () => {},
+  })
   expect(result).toEqual({ kind: 'exit', exitCode: 3, stdout: '', stderr: 'xdg-open: no page viewer is attached\n' })
 })
 

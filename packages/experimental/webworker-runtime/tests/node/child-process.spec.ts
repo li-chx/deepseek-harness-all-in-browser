@@ -101,6 +101,8 @@ it('refuses a command name that is not a string, as Node does', () => {
 
 it('reports that a synchronous run cannot happen, without throwing at the probe', () => {
   expect(spawnSync('bwrap').error?.code).toBe('ENOENT')
+  expect(spawnSync('bwrap', [], { encoding: 'utf8' }).stdout).toBe('')
+  expect(spawnSync('bwrap', [], { encoding: 'utf8' }).error?.code).toBe('ENOENT')
   expect(spawnSync('echo').error?.message).toContain('commands run asynchronously')
   expect(spawnSync(launcherPath(), ['--probe'])).toMatchObject({
     status: 0,
@@ -182,7 +184,7 @@ it('turns an unexpected virtual-launcher preparation failure into exit 125', asy
   const result = await LANDLOCK_EXECUTABLE.prepare(
     ['--ro', '/', '--', 'true'],
     {
-      cwd: WORKSPACE,
+      cwd: WORKSPACE, signal: new AbortController().signal, env: {}, output: () => {},
       filesystem: { ...base, stat: () => Promise.reject(new Error('storage unavailable')) },
     },
   )

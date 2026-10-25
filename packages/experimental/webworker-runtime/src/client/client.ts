@@ -206,9 +206,10 @@ export class WorkerTunnel {
    * Open the tunnel: the worker assembles its host from this frame.
    * @param image - VFS image URL the worker fetches.
    * @param overlays - Ordered data overlay URLs applied before boot.
+   * @param httpPort - Optional dedicated outbound HTTP provider channel.
    */
-  init(image: string, overlays: readonly string[] = []): void {
-    this.worker.postMessage({ t: 'init', image, overlays })
+  init(image: string, overlays: readonly string[] = [], httpPort?: MessagePort): void {
+    this.worker.postMessage({ t: 'init', image, overlays, httpPort }, httpPort === undefined ? [] : [httpPort])
   }
 
   /** Fetch-shaped entry: one request frame, one Response (streamed when the worker streams). */

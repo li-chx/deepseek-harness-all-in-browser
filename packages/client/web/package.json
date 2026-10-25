@@ -23,6 +23,10 @@
     "./injections": {
       "types": "./lib/types/apply-injections.d.ts",
       "default": "./lib/apply-injections.js"
+    },
+    "./platform": {
+      "types": "./lib/types/platform.d.ts",
+      "default": "./lib/platform.js"
     }
   },
   "license": "MIT",
@@ -47,6 +51,7 @@
   },
   "files": [
     "lib/index.js",
+    "lib/platform.js",
     "lib/**/*.css",
     "lib/apply-injections.js",
     "lib/types/**/*.d.ts"

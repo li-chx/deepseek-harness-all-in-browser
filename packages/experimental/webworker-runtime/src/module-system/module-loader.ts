@@ -13,7 +13,8 @@
  */
 import { createAlsRuntime, type AlsCausality, type AlsRuntime } from '../polyfill/async-context/als-runtime.ts'
 import { createCascadedLoader, type CascadedLoader } from '../node/internal_modules/esm-loader.ts'
-import { dirname, fileUrlToPath, isAbsolute, join, pathToFileUrl, resolve as resolvePath } from './posix-path.ts'
+import { basename, dirname, fileUrlToPath, isAbsolute, join, pathToFileUrl, resolve as resolvePath } from './posix-path.ts'
+import { httpModuleGlobal, type HttpFetch } from '../transport/http-transport.ts'
 import { WRAPPER_PARAMS } from '../image-layout.ts'
 import type { HmrModuleSource } from '@deepseek-ai/dsh-hmr'
 import type { MemoryVfs } from '../storage/memory.ts'
@@ -70,7 +71,7 @@ export interface WorkerRequireResolve {
    */
   (specifier: string): string
   /**
-   * Return the directories this loader's Node-style package discovery searches.
+   * Return ancestor node_modules directories for package-manifest discovery, followed by the image root when absent.
    * @param specifier - Module request whose lookup roots are requested.
    * @returns Search roots, or null for a Worker-provided module.
    */
@@ -108,6 +109,8 @@ export interface WorkerModuleLoaderOptions {
    * read only when that route is the configured {@link lowering}.
    */
   readonly alsCausality?: AlsCausality
+  /** Outbound HTTP for modules, including globalThis.fetch and global aliases. */
+  readonly httpFetch?: HttpFetch
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -122,8 +125,12 @@ export class WorkerModuleLoader {
   private readonly staticPrefixes: ReadonlyArray<readonly [string, StaticModuleFactory]>
   private readonly conditions: ReadonlySet<string>
   private readonly als: AlsRuntime
+  private readonly httpFetch: HttpFetch
+  private readonly moduleGlobal: typeof globalThis
   private readonly modules = new Map<string, ModuleRecord>()
   private readonly manifests = new Map<string, PackageManifest>()
+  private readonly packageAliases = new Map<string, string>()
+  private readonly packageScopes = new Map<string, Readonly<Record<string, string>>>()
   private readonly stack: string[] = []
   private readonly bootstrapModules = new Set<string>()
   private cascaded: CascadedLoader | undefined
@@ -141,6 +148,8 @@ export class WorkerModuleLoader {
   }
 
   constructor(options: WorkerModuleLoaderOptions) {
+    this.httpFetch = options.httpFetch ?? globalThis.fetch.bind(globalThis)
+    this.moduleGlobal = httpModuleGlobal(this.httpFetch)
     this.vfs = options.vfs
     this.root = options.root ?? '/dsh'
     // A Map, not the record itself: a specifier that names an Object prototype
@@ -318,7 +327,18 @@ export class WorkerModuleLoader {
     const segments = specifier.split('/')
     const packageName = specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0] ?? specifier
     const rest = specifier.slice(packageName.length).replace(/^\//, '')
-    const packageDirectory = join(this.root, 'node_modules', packageName)
+    let scope = fromDirectory
+    let scoped: Readonly<Record<string, string>> | undefined
+    while (scope !== '/') {
+      scoped = this.packageScopes.get(scope)
+      if (scoped !== undefined) break
+      scope = dirname(scope)
+    }
+    const mapped = scoped !== undefined && Object.hasOwn(scoped, packageName) ? scoped[packageName] : undefined
+    if (scoped !== undefined && mapped === undefined) {
+      return this.fail(`undeclared dependency "${packageName}" from ${scope}`, 'MODULE_NOT_FOUND')
+    }
+    const packageDirectory = mapped ?? this.packageAliases.get(packageName) ?? join(this.root, 'node_modules', packageName)
     if (!this.vfs.existsSync(join(packageDirectory, 'package.json'))) {
       return this.fail(`cannot resolve "${specifier}": ${packageDirectory}/package.json is not in the image`, 'MODULE_NOT_FOUND')
     }
@@ -403,7 +423,9 @@ export class WorkerModuleLoader {
   private compile(code: string, path: string): (...args: unknown[]) => void {
     try {
       // eslint-disable-next-line @typescript-eslint/no-implied-eval -- wrapping an image body is this loader's job
-      return new Function(...WRAPPER_PARAMS, code) as (...args: unknown[]) => void
+      const scope = new Function('fetch', 'globalThis', 'global', 'self',
+        `return function(${WRAPPER_PARAMS.join(',')}) {\n${code}\n}`) as (...args: unknown[]) => (...args: unknown[]) => void
+      return scope(this.httpFetch, this.moduleGlobal, this.moduleGlobal, this.moduleGlobal)
     } catch (reason) {
       if (reason instanceof SyntaxError && /await/i.test(reason.message)) {
         this.fail(`${path} uses top-level await, which cannot run as CommonJS in the worker: ${reason.message}`)
@@ -443,7 +465,15 @@ export class WorkerModuleLoader {
     resolve.paths = (specifier: string): string[] | null => {
       if (this.staticModule(specifier) !== undefined || specifier.startsWith('node:')) return null
       if (specifier.startsWith('.')) return [resolvePath(fromDirectory, '.')]
-      return [join(this.root, 'node_modules')]
+      const paths = new Set<string>()
+      let directory = resolvePath(fromDirectory)
+      while (true) {
+        if (basename(directory) !== 'node_modules') paths.add(join(directory, 'node_modules'))
+        if (directory === '/') break
+        directory = dirname(directory)
+      }
+      paths.add(join(this.root, 'node_modules'))
+      return [...paths]
     }
     return Object.assign(require, { resolve })
   }
@@ -457,6 +487,32 @@ export class WorkerModuleLoader {
     const path = base instanceof URL ? fileUrlToPath(base.href)
       : base.startsWith('file:') ? fileUrlToPath(base) : resolvePath(base)
     return this.requireForModule(this.baseDirectoryOf(base), path, this.modules.get(path))
+  }
+
+  /** Locate a fixed image package without consulting plugin dependency maps.
+   * @param name Package name supplied by the base image.
+   * @returns Absolute package directory.
+   */
+  packageDirectory(name: string): string {
+    return join(this.root, 'node_modules', name)
+  }
+
+  /** Publish profile plugin names for Loader imports originating in its host package.
+   * @param aliases Plugin package names and their managed directories; image packages remain caller-protected.
+   */
+  setPackageAliases(aliases: ReadonlyMap<string, string>): void {
+    this.packageAliases.clear()
+    for (const [name, directory] of aliases) this.packageAliases.set(name, directory)
+    this.manifests.clear()
+  }
+
+  /** Replace importer-specific package mappings after a complete artifact batch arrives.
+   * @param scopes Package directories mapped to dependency names and absolute package directories.
+   */
+  setPackageScopes(scopes: ReadonlyMap<string, Readonly<Record<string, string>>>): void {
+    this.packageScopes.clear()
+    for (const [directory, dependencies] of scopes) this.packageScopes.set(directory, { ...dependencies })
+    this.manifests.clear()
   }
 
   /** Retain modules already loaded by the host before the plugin tree starts. */

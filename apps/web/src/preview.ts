@@ -12,3 +12,15 @@ import {
 const image = `preview/${IMAGE_FILE_NAME}`
 const source = await chooseWorkerHostSource({ image })
 await connectWorkerHost(new DshWorker({ name: 'dsh-host' }), { image, overlays: source.overlays })
+
+const forge = new URL(location.href).searchParams.get('forge')
+if (forge) {
+  const { mountForgePreview } = await import('./forge-preview.ts')
+  const transport = (globalThis as typeof globalThis & {
+    __DSH_TRANSPORT__?: { fetch: import('@deepseek-ai/dsh-experimental-webworker-runtime/client').TunnelFetch }
+  }).__DSH_TRANSPORT__
+  if (transport) {
+    const dispose = mountForgePreview(forge, transport.fetch)
+    window.addEventListener('pagehide', dispose, { once: true })
+  }
+}

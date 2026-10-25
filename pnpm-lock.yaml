@@ -9619,6 +9619,9 @@ importers:
       '@deepseek-ai/dsh-app-boot':
         specifier: workspace:*
         version: link:../../boot/app-boot
+      '@deepseek-ai/dsh-client-web':
+        specifier: workspace:*
+        version: link:../../client/web
       '@deepseek-ai/dsh-experimental-webworker-runtime':
         specifier: workspace:*
         version: link:../webworker-runtime
@@ -9674,6 +9677,9 @@ importers:
       readable-stream:
         specifier: ^4.7.0
         version: 4.7.0
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:~

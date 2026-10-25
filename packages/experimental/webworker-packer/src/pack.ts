@@ -79,6 +79,8 @@ export interface ImageInstallation {
 
 /** Everything the packer needs that it cannot know by itself. */
 export interface PackOptions {
+  /** Exact page-shared package versions; omission declares no Client platform capabilities. */
+  readonly clientPackages?: Readonly<Record<string, string>>
   /** Shipped profile template the worker host boots, recorded in the manifest. */
   readonly profile: string
   /**
@@ -721,6 +723,7 @@ export function packVfsImage(options: PackOptions): PackResult {
   const manifest: ImageManifest = {
     root,
     profile: options.profile,
+    ...options.clientPackages === undefined ? {} : { clientPackages: options.clientPackages },
     ...installation === undefined ? {} : { installation: installation.name },
     lowered: WRAPPER_CONTRACT,
     javascriptEntries: javascriptEntries - lazy.length,

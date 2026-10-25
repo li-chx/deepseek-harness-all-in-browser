@@ -44,7 +44,7 @@ The boot page uses plain DOM and local CSS, so bundle and plugin-activation fail
 <a id="the-shared-module-table"></a>
 ### The shared module table
 
-`PLATFORM_MODULES` (in `src/platform.ts`) names the shell-seeded shared modules — React, Cordis, Zod (`zod`), TanStack Virtual (`@tanstack/react-virtual`), and static UI libraries — and together with `PRELOADED_CLIENT_EXTERNALS` (the parser-preloaded runtime row) defines the implicit external baseline every dynamic bundle resolves against. `dsh.client.external` adds only exact non-baseline requests; see [shared modules and the module graph](../AGENTS.md#shared-modules-and-the-module-graph).
+`PLATFORM_MODULES` (exported by the DOM-free `./platform` entry, implemented in `src/platform.ts`) names the shell-seeded shared modules — React, Cordis, Zod (`zod`), TanStack Virtual (`@tanstack/react-virtual`), and static UI libraries — and together with `PRELOADED_CLIENT_EXTERNALS` (the parser-preloaded runtime row) defines the implicit external baseline every dynamic bundle resolves against. `dsh.client.external` adds only exact non-baseline requests; see [shared modules and the module graph](../AGENTS.md#shared-modules-and-the-module-graph).
 
 Built-in and installed browser plugins in the same page receive the same module instances. The shell supplies the dependency versions declared in this package's `package.json`; the module table does not negotiate versions per plugin. External plugins that use these modules must target a host that provides the required specifiers and APIs, and keep those imports external when building their client bundle. Inlined dependencies remain private to their bundle; Host code and Workers resolve their dependencies separately.
 

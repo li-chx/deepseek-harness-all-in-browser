@@ -14,6 +14,8 @@ kind: "package-library"
 ## 目录
 
 - [使用本包](#use-this-package)
+- [Forge 插件更新](#forge-plugin-updates)
+- [出站 HTTP 提供器](#outbound-http-providers)
 - [模型体验](#model-experience)
 - [已知限制与延期工作](#known-limitations-and-deferred-work)
 - [开发备注](#dev-note)
@@ -39,6 +41,32 @@ kind: "package-library"
 
 -----
 
+<a id="forge-plugin-updates"></a>
+## Forge 插件更新
+
+预览页面通过 `?forge=<HTTP 服务地址>` 打开可选控制面板。**DSH Forge** 将 TypeScript Host 插件源码或 npm 包规格提交给该服务，并通过运行中的 Worker 应用编译清单。前端内嵌 `FORGE_GENERATION`；服务必须面向同一代际以及基础镜像提供的准确宿主包版本。核心包和共享宿主模块由前端构建提供。目标单独声明 `clientPackages`，在应用 overlay 前从可信基础镜像捕获；页面共享包的准确版本用于满足 Client 依赖，不授予 Host 导入能力。缺失或不匹配的 Client 依赖，以及替换共享 Client 包的尝试，均在文件写入前拒绝。带有受支持的单入口 `dsh.bundle` patch 的发布包可以携带现成的 Client bundle；包元数据和资源进入普通 Client 图及 HMR 路径。
+
+安装器在修改文件前校验完整清单、受支持的 bundle patch 和缺失产物的字节。发布的 bundle 使用 profile 原生的 `dsh.profile.bundles` 选择及其原始 patch id；更新会删除旧的 Forge 注册行，使原生控制和 Forge 共用一个实例。更新保留原生禁用选择并报告 `disabled`；已安装状态查询读取当前选择和实时 Loader 条目。不含 bundle 元数据的插件使用 Forge 管理的 profile patch 行。无关的 profile 字段和 patch 行保持不变。
+
+按引用方解析的包映射支持独立依赖版本，无需文件系统软链接。路径稳定的入口包装文件引用当前不可变包，由 Cordis HMR 检测文件变更。协调过程要求所选 bundle 的真实条目 id，并确认实时激活。失败时保留包文件及诊断，但不保证恢复旧实例。删除先取消选择并卸载插件，再回收无共享引用的文件；卸载失败时保留其依赖声明和文件。
+
+配置后的 Worker 通过 `node:child_process` 提供限定于当前 profile 的虚拟 `dsh plugin --profile <profile> add|update|remove <npm-package>` 命令。安装在 Forge 编译、文件校验应用和 Host 协调完成后才报告成功。同步调用可以检查本地命令和版本元数据，但不能执行远程工作。预览页面将同源 `/api/` 和 `/dsh-plugin-hub` Fetch 请求转给 Worker，包括发布插件直接调用的 Host 路由。查询字符串、方法、头部、请求体和取消均保留；同源 Origin 头与合成 Host 一起转换。静态资源、外域和相似路径名使用原页面 Fetch。路由错误不会重试静态服务器。合成请求的异步迭代和 `data`/`end`/`error` 监听共享同一个兼容 Node 的 Readable 请求体，`setEncoding()` 保留跨分块的字符序列。取消交换或完成响应会取消未读输入。
+
+所有文件变更均使用普通 VFS mutation。`ForgeInstaller.subscribe()` 提供文件应用和激活的批次通知，VFS 订阅者则观察单个写入和删除。两种通知都不确认持久化完成。Forge 将已安装根包映射到 profile 的 `node_modules`；`createRequire(anchor).resolve.paths()` 提供锚点的各级父目录包搜索路径，使标准 bundle 清单无需 `./package.json` 导出即可发现这些包。安装状态仅在当前 Worker 生命周期内有效；刷新页面即丢失。[安装器](src/forge/installer.ts) 负责这些操作，[协议校验器](src/forge/protocol.ts) 负责清单准入。
+
+-----
+
+<a id="outbound-http-providers"></a>
+## 出站 HTTP 提供器
+
+`createWorkerHost({ httpTransport })` 接收实例拥有的提供器，其方法为 `fetch(request: Request): Promise<Response>`。镜像和延迟归档下载、Forge 构建和产物、虚拟 `curl`、`node:https.get`，以及 VFS 模块中的 Fetch 调用（包括模型提供器和插件的 `globalThis.fetch`）均经过它。省略时使用平台 Fetch。模块的全局别名解析到同一个加载器代理，真实 Worker 全局保持不变。这是依赖注入，不是不可信 JavaScript 的沙箱。
+
+提供器在页面中实现时，将其传给 `connectWorkerHost(worker, { httpTransport })`。独立 MessageChannel 传输请求与响应字段及 ReadableStream，并转发取消；函数保留在页面中。传输失败和 opaque 响应明确报错，不退回整包缓冲。返回的 `disposeHttp()` 取消并解除此提供器，Worker 和隧道仍由调用者管理。直接嵌入 Worker 时，调用者负责销毁提供器，并通过 `host.stop()` 取消活动 HTTP。提供器必须遵守 `Request.signal`，包括尚未读完的响应体；宿主关闭也会取消未读响应流。
+
+将同一个提供器作为第三个参数传给预览的 `mountForgePreview(serverUrl, hostFetch, httpTransport)`，其目标和构建请求也会经过该提供器。这不会拦截页面全局 Fetch、来源选择器请求、浏览器脚本和图片加载、WebSocket 或创建另一个 JavaScript realm 的代码。默认提供器仍受浏览器 CORS 限制；将来的原生 RPC 提供器可以提供自己的 HTTP 实现，而无需修改插件的请求调用。
+
+-----
+
 <a id="model-experience"></a>
 ## 模型体验
 
@@ -55,9 +83,11 @@ kind: "package-library"
 - **worker 组合写明文会话日志**（镜像 home patch 中的 `compression: 'none'`；ConfigEditor 会拒绝修改这一行的配置）：不带 Zstandard 编解码器，导出日志是 `.jsonl`，不会是 `.jsonl.zstd`。
 - **`node:dns/promises`、`node:vm`、`node:net`、`node:sqlite`、`node:worker_threads` 是结构化 stub**：每次调用在 console 报告拒绝，并抛出带 Node `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` 错误码的错误。需要原生 DNS、真进程或真 realm 隔离的行在此无法运行。
 - **`node:assert/strict` 仅支持真值断言**：对于假值，可调用的默认导出和 `ok` 使用传入的消息或通用文本抛出 `ERR_ASSERTION`，或原样抛出传入的 Error。其他断言 API 未提供。
+- **网络兼容能力使用配置的 HTTP 提供器**：`node:https.get` 支持 registry 元数据响应，虚拟 `curl` 支持 Plugin Hub 目录和探测使用的参数。默认提供器遵守浏览器 CORS 规则；进程代理设置、自定义 TLS 选项和同步网络请求不受支持。
+- **原生响应原型补丁不影响隧道**：合成响应不继承 `http.ServerResponse.prototype`；插件在此原型上安装的 gzip 或 Brotli 压缩补丁不会压缩隧道响应。
 - **原生 TLS 监听器需要 Node Host**：worker 的 `node:https.createServer` 会拒绝激活，不会替换成明文。预览内部的 HTTP 隧道不绑定套接字；面向浏览器的 HTTPS 由部署服务器提供。
 - **桌面产品埋点不可用**：`got.post` 明确报告 worker host 不支持该调用。浏览器镜像不包含 Got 及其 Node HTTP 依赖；预览组合不启用桌面上报。
-- **宿主包管理命令不可用**：`execa` 明确报告 worker host 不支持该调用；预览无法运行 pnpm、安装插件或安装原生依赖。
+- **包命令仅支持 Forge 插件操作**：Worker 不运行 pnpm、全局 npm 安装、Git 安装或任意 Node 子进程。`execa` 仍不可用。[Forge](#forge-plugin-updates) 在服务端解析和编译受支持的 npm 插件。
 - **pi-ai 模型请求不可用**：替代实现暴露已安装提供方标识的固定子集，不包含模型，使适配器能够注册配置元数据。升级 pi-ai 时必须保持这些标识有效；推理入口明确报告 worker host 不支持该调用。
 - **PTC Node 程序不可用**：process shim 用 `/dsh/bin/node` 表示可执行文件身份，使 provider 能够激活，但 Worker 既没有 Node 可执行文件，也没有 `stripTypeScriptTypes`。程序执行会在启动子进程前失败。
 - **Office 转换需要 Node Host**：LibreOffice kit 的替代模块以 `unavailable` 拒绝创建转换器。浏览器镜像排除 kit 及其引擎依赖；Office 预览提示转换不可用。

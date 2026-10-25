@@ -38,7 +38,13 @@ export interface VirtualExecutable {
    */
   prepare(
     args: readonly string[],
-    context: { readonly cwd: string; readonly filesystem: ShellFileSystem },
+    context: {
+      readonly cwd: string
+      readonly filesystem: ShellFileSystem
+      readonly signal: AbortSignal
+      readonly env: Readonly<Record<string, string>>
+      output(this: void, stream: 'stdout' | 'stderr', text: string): void
+    },
   ): Promise<VirtualExecutablePreparation>
   /**
    * Handle the subset that can complete synchronously.
@@ -60,4 +66,27 @@ const EXECUTABLES: ReadonlyMap<string, VirtualExecutable> = new Map([
  */
 export function virtualExecutable(path: string): VirtualExecutable | undefined {
   return EXECUTABLES.get(basename(path))
+}
+
+/** Executables owned by one Worker host; registrations end with that host. */
+export class VirtualExecutableRegistry {
+  private readonly entries = new Map<string, VirtualExecutable>()
+
+  /** Register one host capability without replacing an existing executable.
+   * @param executable Capability implementation.
+   * @returns Remove this registration.
+   */
+  register(executable: VirtualExecutable): () => void {
+    if (this.entries.has(executable.name) || EXECUTABLES.has(executable.name)) throw new Error(`Executable already registered: ${executable.name}`)
+    this.entries.set(executable.name, executable)
+    return () => { this.entries.delete(executable.name) }
+  }
+
+  /** Resolve a scoped or built-in executable.
+   * @param path Executable name or absolute virtual path.
+   * @returns Implementation when available.
+   */
+  resolve(path: string): VirtualExecutable | undefined {
+    return this.entries.get(basename(path)) ?? virtualExecutable(path)
+  }
 }

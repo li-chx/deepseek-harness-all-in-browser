@@ -10,9 +10,9 @@
  * so **line numbers survive**: a stack frame in a transformed module points at
  * the same line as the built artifact it came from.
  *
- * The image packer is this transform's only caller: it lowers every JavaScript
- * entry it packs and records `LOWERING_VERSION` in the image manifest, so the
- * worker wraps those bodies without carrying a compiler of its own.
+ * The image packer and Forge build service lower JavaScript before delivery.
+ * Images record `LOWERING_VERSION`; Forge fixes the transform by build generation.
+ * The worker wraps these bodies without carrying a compiler of its own.
  * @module @deepseek-ai/dsh-experimental-webworker-runtime/src/compile/transform
  */
 import { parse } from 'acorn'

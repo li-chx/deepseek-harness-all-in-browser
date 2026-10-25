@@ -7,6 +7,8 @@
  * assumptions about pnpm workspaces or the `dsh` CLI.
  * @module @deepseek-ai/dsh-experimental-webworker-packer/src/repository
  */
+import { createRequire } from 'node:module'
+import { PLATFORM_MODULES } from '@deepseek-ai/dsh-client-web/platform'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join, posix, relative } from 'node:path'
 import {
@@ -200,6 +202,22 @@ export function installationManifest(repoRoot: string): ImageInstallation {
   return { name, manifest }
 }
 
+/** Read exact versions of the page's shared modules from the Client build resolver.
+ * @param repoRoot Repository whose Client dependencies supply the static platform table.
+ * @returns Package-root versions; no modules are added to the Worker filesystem.
+ */
+export function clientPlatformPackages(repoRoot: string): Readonly<Record<string, string>> {
+  const require = createRequire(join(repoRoot, 'packages/client/web/package.json'))
+  const names = new Set(PLATFORM_MODULES.map(name => name.split('/').slice(0, name.startsWith('@') ? 2 : 1).join('/')))
+  return Object.fromEntries([...names].sort().map((name) => {
+    const value = JSON.parse(readFileSync(require.resolve(`${name}/package.json`), 'utf8')) as { name?: unknown; version?: unknown }
+    if (value.name !== name || typeof value.version !== 'string' || value.version.length === 0) {
+      throw new Error(`Client platform package ${name} has no matching name and exact version`)
+    }
+    return [name, value.version]
+  }))
+}
+
 /**
  * Pack this repository's base image for one shipped profile.
  * @param repoRoot - Absolute repository root.
@@ -210,6 +228,7 @@ export function installationManifest(repoRoot: string): ImageInstallation {
 export function packRepositoryImage(repoRoot: string, profile: string, root?: string): PackResult {
   return packVfsImage({
     profile,
+    clientPackages: clientPlatformPackages(repoRoot),
     roster: profileRoster(repoRoot, profile).roster,
     installation: installationManifest(repoRoot),
     ...root === undefined ? {} : { root },

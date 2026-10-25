@@ -4,7 +4,8 @@
  * and the installation manifest alone as the bundle resolution anchor. No
  * composed configuration is packed; the Worker composes the bundle layers itself.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,7 +14,7 @@ import { OPTIONAL_BUNDLES, PROFILE_TEMPLATES } from '@deepseek-ai/dsh-app-boot'
 import yaml from 'js-yaml'
 import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
 import { HOME_PATCH_PATH, MANIFEST_PATH, packVfsImage } from '../src/pack.ts'
-import { installationManifest, platformHomePatch, profileRoster } from '../src/repository.ts'
+import { clientPlatformPackages, installationManifest, platformHomePatch, profileRoster } from '../src/repository.ts'
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 
@@ -42,6 +43,18 @@ describe('profile roster', () => {
       name: '@deepseek-ai/dsh',
       manifest: join(repoRoot, 'apps/cli/package.json'),
     })
+  })
+})
+
+describe('Client platform packages', () => {
+  it('reads installed static Client versions without importing their runtime', () => {
+    const packages = clientPlatformPackages(repoRoot)
+    const require = createRequire(join(repoRoot, 'packages/client/web/package.json'))
+    for (const name of ['react', 'react-dom', '@deepseek-ai/dsh-client-ui-primitives', '@deepseek-ai/dsh-client-ui-slots']) {
+      const manifest = JSON.parse(readFileSync(require.resolve(`${name}/package.json`), 'utf8')) as { version: string }
+      expect(packages[name]).toBe(manifest.version)
+    }
+    expect(packages).not.toHaveProperty('react/jsx-runtime')
   })
 })
 
@@ -84,6 +97,7 @@ describe('image layout', () => {
     const { root, installation } = subject(test)
     const result = packVfsImage({
       profile: 'web', roster: ['subject'], installation: { name: '@scope/app', manifest: installation },
+      clientPackages: { react: '18.3.1' },
       workspaces: new Map([['subject', join(root, 'subject')]]), resolveFrom: root, entries: [],
     })
     expect(result.missing).toEqual([])
@@ -93,7 +107,7 @@ describe('image layout', () => {
     // The manifest is the only configuration-directory entry: no composed profile is packed.
     expect(Object.keys(result.files).filter(name => name.startsWith('config/'))).toEqual([MANIFEST_PATH])
     expect(JSON.parse(new TextDecoder().decode(result.files[MANIFEST_PATH]))).toMatchObject({
-      profile: 'web', installation: '@scope/app',
+      profile: 'web', installation: '@scope/app', clientPackages: { react: '18.3.1' },
     })
   })
 

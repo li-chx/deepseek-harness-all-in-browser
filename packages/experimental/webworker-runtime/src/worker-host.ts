@@ -24,6 +24,7 @@
  * @module @deepseek-ai/dsh-experimental-webworker-runtime/src/worker-host
  */
 import { setActiveModuleLoader, WorkerModuleLoader, type StaticModuleFactory } from './module-system/module-loader.ts'
+import type { Loader } from '@deepseek-ai/cordis-plugin-loader'
 import type { ProfileContext } from '@deepseek-ai/dsh-app-boot'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
@@ -40,6 +41,15 @@ import {
   DEFAULT_ROOT, IMAGE_EMPTY_DIRECTORIES, IMAGE_HOME_DIRECTORY, IMAGE_MANIFEST_PATH, LOWERING_VERSION,
 } from './image-layout.ts'
 import { parseImageManifest, type ImageManifest } from './image-manifest.ts'
+import { isForgeEntryActive } from './forge/activation.ts'
+import { createForgeHost, readForgeHostPackages } from './forge/host.ts'
+import type { ForgeInstaller } from './forge/installer.ts'
+import { VirtualExecutableRegistry } from './shell/process/virtual-executables.ts'
+import { createChildProcessFacade } from './node/builtin_modules/implemented/child_process.ts'
+import { WorkerHttpTransport, type HttpTransport, type HttpFetch } from './transport/http-transport.ts'
+import { createHttpsModule } from './node/builtin_modules/implemented/https.ts'
+import { createCurlExecutable } from './shell/process/curl.ts'
+import type Hmr from '@deepseek-ai/dsh-hmr'
 
 export { DEFAULT_ROOT } from './image-layout.ts'
 
@@ -76,6 +86,8 @@ export interface HostContext {
 
 /** Construction inputs for {@link createWorkerHost}. */
 export interface WorkerHostOptions {
+  /** Outbound HTTP provider; defaults to platform Fetch. Must honor Request.signal through body consumption. */
+  readonly httpTransport?: HttpTransport
   /**
    * Modules served from the worker bundle rather than the image: the `node:*`
    * proxies, the not-implemented stubs for excluded npm packages, and anything else whose
@@ -140,6 +152,8 @@ export interface WorkerHost {
   readonly vfs: MemoryVfs | undefined
   /** Module loader behind the Cordis module seam. */
   readonly modules: WorkerModuleLoader | undefined
+  /** Plugin batch observation after start; absent when the profile has no HMR service. */
+  readonly forge: ForgeInstaller | undefined
 }
 
 function requireGlobalPort(channel: TunnelPort | undefined): TunnelPort {
@@ -152,9 +166,9 @@ function requireGlobalPort(channel: TunnelPort | undefined): TunnelPort {
   return { postMessage: (message, transfer) => { post(message, transfer) } }
 }
 
-async function readImage(image: Uint8Array | string): Promise<Uint8Array> {
+async function readImage(image: Uint8Array | string, fetcher: HttpFetch): Promise<Uint8Array> {
   if (typeof image !== 'string') return await inflateImage(image, 'the image bytes given to createWorkerHost')
-  const response = await fetch(image)
+  const response = await fetcher(image)
   if (!response.ok) throw new Error(`webworker host: image fetch failed with ${String(response.status)} for ${image}`)
   if (response.body === null) throw new Error(`webworker host: image response for ${image} carried no body`)
   // Inflated off the response stream: the archive is built while the rest of the
@@ -168,6 +182,7 @@ async function readImage(image: Uint8Array | string): Promise<Uint8Array> {
  * @returns Handle whose `handleMessage` is ready immediately.
  */
 export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
+  const http = new WorkerHttpTransport(options.httpTransport)
   const root = options.root ?? DEFAULT_ROOT
   const port = options.port ?? DEFAULT_PORT
   const tunnel = new TunnelServer({
@@ -181,6 +196,9 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
   let vfs: MemoryVfs | undefined
   let modules: WorkerModuleLoader | undefined
   let context: HostContext | undefined
+  let forge: ReturnType<typeof createForgeHost> | undefined
+  const executables = new VirtualExecutableRegistry()
+  const unregisterExecutables: Array<() => void> = []
 
   const start = async (): Promise<void> => {
     try {
@@ -188,10 +206,13 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       const processShim = installProcessGlobal({ cwd: root, env: { DSH_HOME: home, HOME: home, ...options.env } })
 
       const [bytes, overlays] = await Promise.all([
-        readImage(options.image),
-        Promise.all((options.overlays ?? []).map(readImage)),
+        readImage(options.image, http.request),
+        Promise.all((options.overlays ?? []).map(image => readImage(image, http.request))),
       ])
       const mounted = loadVfsImage(bytes, root)
+      const hostPackages = readForgeHostPackages(mounted, root)
+      const manifestPath = options.manifestPath ?? join(root, IMAGE_MANIFEST_PATH)
+      const clientPackages = Object.freeze({ ...readImageManifest(mounted, manifestPath).clientPackages })
       for (const overlay of overlays) loadVfsOverlay(overlay, root, mounted)
       // Belt and braces over the image's own empty-directory entries: a hand
       // -built image without them still boots.
@@ -201,16 +222,23 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       setActiveVfs(mounted)
       vfs = mounted
 
-      const manifestPath = options.manifestPath ?? join(root, IMAGE_MANIFEST_PATH)
       const manifest = readImageManifest(mounted, manifestPath)
-      deferLazyArchives(mounted, manifest, root, options.image)
+      deferLazyArchives(mounted, manifest, root, options.image, http.request)
       const staticModules: Record<string, StaticModuleFactory> = { ...options.staticModules }
+      const https = createHttpsModule(http.request)
+      staticModules['node:https'] = () => https
+      staticModules.https = () => https
+      const childProcess = createChildProcessFacade(executables)
+      staticModules['node:child_process'] = () => childProcess
+      staticModules.child_process = () => childProcess
+      unregisterExecutables.push(executables.register(createCurlExecutable(http.request)))
       // Read at require time, not here: the table entry then answers whichever
       // global `installProcessGlobal` left in place, in this role's order.
       for (const key of ['node:process', 'process']) {
         staticModules[key] ??= (): unknown => (globalThis as { process?: unknown }).process
       }
       const loader = new WorkerModuleLoader({
+        httpFetch: http.request,
         vfs: mounted,
         root,
         staticModules,
@@ -272,7 +300,21 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
 
       // The worker tree serves only the page that spawned it, so every call speaks for the browser Peer.
       const peer = connection.browserPeer
+      const hmr = ctx.get('hmr') as Hmr | undefined
+      if (hmr !== undefined) {
+        const nativeLoader = ctx.get('loader') as Loader | undefined
+        if (nativeLoader === undefined) throw new Error('webworker host: HMR requires the Loader service')
+        forge = createForgeHost(mounted, loader, profile.dir, hostPackages, hmr,
+          (id, name) => isForgeEntryActive(nativeLoader, id, name), http.request, clientPackages)
+      }
+      if (forge !== undefined) {
+        unregisterExecutables.push(executables.register(forge.commands.dsh), executables.register(forge.commands.which))
+      }
+      const forgeFetch = forge?.fetch
       tunnel.serve({
+        ...forgeFetch === undefined ? {} : { localRoutes: new Map(
+          ['/__forge/target', '/__forge/installed', '/__forge/install', '/__forge/remove', '/__forge/configure'].map(path => [path, forgeFetch]),
+        ) },
         directFetch: (request: Request) => handler.fetch(request, peer),
         bootPayload: () => readBootPayload(ctx),
         openStream: (endpoint, payload, uplink, signal) =>
@@ -281,6 +323,7 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       })
       started.resolve()
     } catch (reason) {
+      http.close()
       tunnel.fail(reason)
       throw reason
     }
@@ -290,14 +333,21 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
     handleMessage: (data: unknown): void => { tunnel.handleMessage(data) },
     start,
     stop: async (): Promise<void> => {
+      http.close()
       tunnel.fail(new Error('webworker host: the tree was disposed'))
+      await forge?.commands.close()
+      await forge?.installer.close()
       await context?.fiber.dispose()
+      for (const unregister of unregisterExecutables) unregister()
     },
     get vfs(): MemoryVfs | undefined {
       return vfs
     },
     get modules(): WorkerModuleLoader | undefined {
       return modules
+    },
+    get forge(): ForgeInstaller | undefined {
+      return forge?.installer
     },
   }
 }
@@ -394,9 +444,10 @@ function readImageManifest(vfs: MemoryVfs, path: string): ImageManifest {
  * @param manifest - Validated image manifest.
  * @param root - Virtual root the archives' entries mount under.
  * @param image - The image bytes or URL; archive names resolve against a URL.
+ * @param fetcher Host-owned outbound HTTP.
  * @throws When the image registers lazy archives but arrived as bytes, leaving them unlocatable.
  */
-function deferLazyArchives(vfs: MemoryVfs, manifest: ImageManifest, root: string, image: Uint8Array | string): void {
+function deferLazyArchives(vfs: MemoryVfs, manifest: ImageManifest, root: string, image: Uint8Array | string, fetcher: HttpFetch): void {
   if (manifest.lazy.length === 0) return
   if (typeof image !== 'string') {
     throw new Error('webworker host: the image registers lazy archives, which only an image fetched from a URL can locate')
@@ -404,7 +455,7 @@ function deferLazyArchives(vfs: MemoryVfs, manifest: ImageManifest, root: string
   const base = new URL(image, (globalThis as { location?: { href: string } }).location?.href)
   for (const archive of manifest.lazy) {
     const url = new URL(archive.archive, base).href
-    vfs.deferArchive({ name: archive.archive, root, files: archive.files, load: () => readImage(url) })
+    vfs.deferArchive({ name: archive.archive, root, files: archive.files, load: () => readImage(url, fetcher) })
   }
 }
 

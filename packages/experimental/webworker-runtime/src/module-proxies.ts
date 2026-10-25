@@ -58,8 +58,9 @@ export const MODULE_PROXIES: Record<string, string> = {
   // The worker's own process layer: `bash -c` and the command table run against
   // the VFS, because a browser worker has no processes to fork.
   'node:child_process': './node/builtin_modules/implemented/child_process.ts',
+  'node:https': './node/builtin_modules/implemented/https.ts',
+  'https': './node/builtin_modules/implemented/https.ts',
   // Structural mocks: every symbol exists, every call throws.
-  'node:https': './node/builtin_modules/mock/https.ts',
   'node:dns/promises': './node/builtin_modules/mock/dns/promises.ts',
   'dns/promises': './node/builtin_modules/mock/dns/promises.ts',
   'node:net': './node/builtin_modules/mock/net.ts',

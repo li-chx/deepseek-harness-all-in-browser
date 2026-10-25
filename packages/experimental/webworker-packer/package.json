@@ -35,6 +35,7 @@
   "dependencies": {
     "@deepseek-ai/cordis-plugin-include": "workspace:~",
     "@deepseek-ai/dsh-app-boot": "workspace:*",
+    "@deepseek-ai/dsh-client-web": "workspace:*",
     "@deepseek-ai/dsh-experimental-webworker-runtime": "workspace:*",
     "@deepseek-ai/dsh-session-format": "workspace:*",
     "@deepseek-ai/dsh-session-format-catalog": "workspace:*",
