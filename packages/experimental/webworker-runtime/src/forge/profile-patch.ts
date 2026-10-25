@@ -1,6 +1,6 @@
 /** YAML edits preserve profile rows and tagged expressions outside the managed plugin entry. */
-import { isMap, isSeq, isScalar, parseDocument } from 'yaml'
-import { ForgeError, object, pluginId } from './protocol.ts'
+import { isAlias, isMap, isSeq, isScalar, parseDocument, visit } from 'yaml'
+import { ForgeError, pluginId } from './protocol.ts'
 
 /** Insert, replace or remove one Forge-owned Loader registration.
  * @param text Existing profile patch document.
@@ -32,23 +32,63 @@ export function editForgeProfilePatch(text: string, id: string, entry: string | 
   return String(document)
 }
 
-/** Read the supported published bundle's native Loader entry identifier.
- * @param text Verified bundle patch artifact.
+/** Read a published self-loading entry with optional literal configuration.
+ * @param text Verified bundle patch artifact; its bytes are retained unchanged during installation.
  * @param name Published package name the entry must load.
  * @returns Native entry id required during profile reconciliation.
  */
 export function forgeBundleEntry(text: string, name: string): string {
   const document = parseDocument(text)
-  if (document.errors.length || document.warnings.length) throw new ForgeError('unsupported-bundle', 'Bundle patch must contain one literal insert')
+  if (document.errors.length || document.warnings.length) {
+    throw new ForgeError('unsupported-bundle', 'Bundle patch must be valid literal YAML without unsupported tags')
+  }
+  visit(document, (_key, node) => {
+    if (isAlias(node)) throw new ForgeError('unsupported-bundle', 'Bundle patch cannot contain YAML aliases')
+    if (isScalar(node) || isMap(node) || isSeq(node)) {
+      if (node.tag !== undefined && !/^tag:yaml\.org,2002:(?:null|bool|int|float|str|map|seq)$/.test(node.tag)) {
+        throw new ForgeError('unsupported-bundle', `Bundle patch contains unsupported YAML tag ${node.tag}`)
+      }
+    }
+    if (isMap(node) && node.items.some(item => !isScalar(item.key) || typeof item.key.value !== 'string')) {
+      throw new ForgeError('unsupported-bundle', 'Bundle patch object keys must be strings')
+    }
+  })
   const rows: unknown = document.toJSON()
   if (!Array.isArray(rows) || rows.length !== 1) throw new ForgeError('unsupported-bundle', 'Bundle patch must contain one insert')
-  const row = object(rows[0])
-  if (Object.keys(row).length !== 1 || !Array.isArray(row.insert) || row.insert.length !== 1) {
-    throw new ForgeError('unsupported-bundle', 'Bundle patch must contain one inserted entry')
+  const row = bundleObject(rows[0], 'Bundle patch row')
+  if (Object.keys(row).some(key => key !== 'insert') || !Array.isArray(row.insert) || row.insert.length !== 1) {
+    throw new ForgeError('unsupported-bundle', 'Bundle patch must contain one inserted entry and no other patch operations')
   }
-  const entry = object(row.insert[0])
-  if (Object.keys(entry).length !== 2 || entry.name !== name) throw new ForgeError('unsupported-bundle', 'Bundle entry must load its published package')
+  const entry = bundleObject(row.insert[0], 'Bundle entry')
+  for (const key of Object.keys(entry)) {
+    if (!['id', 'name', 'config'].includes(key)) {
+      throw new ForgeError('unsupported-bundle', `Bundle entry field ${key} is not supported`)
+    }
+  }
+  if (entry.name !== name) throw new ForgeError('unsupported-bundle', 'Bundle entry must load its published package')
+  if ('config' in entry) validateLiteral(entry.config)
   return pluginId(entry.id)
+}
+
+function bundleObject(value: unknown, subject: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ForgeError('unsupported-bundle', `${subject} must be a literal object`)
+  }
+  return value as Record<string, unknown>
+}
+
+function validateLiteral(value: unknown): void {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return
+  if (typeof value === 'number' && Number.isFinite(value)) return
+  if (Array.isArray(value)) {
+    for (const item of value) validateLiteral(item)
+    return
+  }
+  if (typeof value === 'object') {
+    for (const item of Object.values(value)) validateLiteral(item)
+    return
+  }
+  throw new ForgeError('unsupported-bundle', 'Bundle entry config must contain only JSON literals with finite numbers')
 }
 
 /** Identify a legacy Forge registration that needs migration to native bundle selection.

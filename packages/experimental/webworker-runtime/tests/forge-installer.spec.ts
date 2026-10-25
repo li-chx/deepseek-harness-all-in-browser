@@ -100,11 +100,11 @@ it('resolves two versions by importer and retains a dependency used by another i
 it('rejects the preceding frontend generation before downloading or writing', async () => {
   const f = fixture()
   const { manifest } = plan()
-  manifest.generation = 'dsh-worker-1'
+  manifest.generation = 'dsh-worker-rc2-1'
   for (const pkg of manifest.packages) {
-    for (const file of pkg.files) file.objectKey = `dsh-worker-1/objects/${file.sha256}`
+    for (const file of pkg.files) file.objectKey = `dsh-worker-rc2-1/objects/${file.sha256}`
   }
-  expect(f.installer.target().generation).toBe('dsh-worker-rc2-1')
+  expect(f.installer.target().generation).toBe('dsh-worker-rc2-2')
   await expect(f.installer.install(manifest, 'http://forge.local')).rejects.toMatchObject({ code: 'generation-mismatch' })
   expect(f.calls).toEqual([])
   expect(f.writes).toEqual([])
@@ -372,4 +372,68 @@ it('retains files and dependency if reconciliation leaves a removed bundle activ
   expect(JSON.parse(f.vfs.readFileSync('/dsh/home/profiles/web/package.json', 'utf8') as string)).toMatchObject({
     dependencies: { 'plugin-one': '1.0.0' }, dsh: { profile: { bundles: [] } },
   })
+})
+
+
+it('preserves published bundle configuration and original patch bytes for native composition', async () => {
+  const f = fixture()
+  const patch = '- insert:\n  - id: native-one\n    name: plugin-one\n    # package defaults\n    config:\n      enabled: true\n      nested: { choices: [1, null, "value"], label: 你好 }\n'
+  const first = publishedPlan('exports.value = 1', patch)
+  for (const pair of first.files) f.artifacts.set(...pair)
+  f.onReconcile(() => {
+    expect(f.vfs.readFileSync('/dsh/home/profiles/web/node_modules/plugin-one/cordis.patch.yml', 'utf8')).toBe(patch)
+  })
+  expect(await f.installer.install(first.manifest, 'http://forge.local')).toMatchObject({ status: 'active' })
+  expect(f.required).toEqual([['native-one']])
+  const immutable = `/dsh/home/profiles/web/plugins/.forge/packages/${first.manifest.plugin.packageId}/cordis.patch.yml`
+  expect(f.vfs.readFileSync(immutable, 'utf8')).toBe(patch)
+})
+
+it.each([
+  ['config: { limit: .inf }', 'finite numbers'],
+  ['config: { limit: .nan }', 'finite numbers'],
+  ['config: { value: !!js process.exit() }', 'unsupported tags'],
+  ['config: !!js ({})', 'unsupported tags'],
+  ['config: { value: !custom data }', 'unsupported tags'],
+  ['config: { original: &value [1], copy: *value }', 'YAML aliases'],
+  ['config: { 1: value }', 'object keys must be strings'],
+  ['disabled: true', 'field disabled is not supported'],
+  ['group: []', 'field group is not supported'],
+  ['inject: []', 'field inject is not supported'],
+  ['isolate: true', 'field isolate is not supported'],
+])('rejects unsupported bundle option %s before any write', async (option, message) => {
+  const f = fixture()
+  const patch = `- insert:\n  - id: native-one\n    name: plugin-one\n    ${option}\n`
+  const first = publishedPlan('exports.value = 1', patch)
+  for (const pair of first.files) f.artifacts.set(...pair)
+  const operation = f.installer.install(first.manifest, 'http://forge.local')
+  await expect(operation).rejects.toMatchObject({ code: 'unsupported-bundle' })
+  await expect(operation).rejects.toThrow(message)
+  expect(f.writes).toEqual([])
+  expect(f.required).toEqual([])
+  expect(f.installer.installed().plugins).toEqual([])
+})
+
+it.each([
+  '- insert: [{id: native-one, name: plugin-one}, {id: extra, name: plugin-one}]\n',
+  '- insert: [{id: native-one, name: plugin-one}]\n- insert: [{id: extra, name: plugin-one}]\n',
+  '- insert: [{id: native-one, name: plugin-one}]\n  remove: other\n',
+])('rejects additional bundle entries or operations before any write', async (patch) => {
+  const f = fixture()
+  const first = publishedPlan('exports.value = 1', patch)
+  for (const pair of first.files) f.artifacts.set(...pair)
+  await expect(f.installer.install(first.manifest, 'http://forge.local')).rejects.toMatchObject({ code: 'unsupported-bundle' })
+  expect(f.writes).toEqual([])
+  expect(f.required).toEqual([])
+})
+
+
+it.each(['[]', '[1, false, null]', 'null', '1', 'false', '"value"'])('retains literal config %s for the plugin to validate', async (config) => {
+  const f = fixture()
+  const patch = `- insert:\n  - id: native-one\n    name: plugin-one\n    config: ${config}\n`
+  const first = publishedPlan('exports.value = 1', patch)
+  for (const pair of first.files) f.artifacts.set(...pair)
+  expect(await f.installer.install(first.manifest, 'http://forge.local')).toMatchObject({ status: 'active' })
+  expect(f.vfs.readFileSync('/dsh/home/profiles/web/node_modules/plugin-one/cordis.patch.yml', 'utf8')).toBe(patch)
+  expect(f.required).toEqual([['native-one']])
 })
