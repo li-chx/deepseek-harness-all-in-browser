@@ -361,7 +361,7 @@ export class ForgeInstaller {
         const rootPackage = manifest.packages.find(pkg => pkg.id === manifest.plugin.packageId)
         if (rootPackage === undefined) throw new ForgeError('invalid-manifest', 'Plugin package is missing')
         for (const file of rootPackage.files) {
-          if (file.path === 'index.js') continue
+          if (file.path === rootPackage.entry || file.path === 'index.js') continue
           const data = this.options.vfs.readFileSync(join(this.packageDirectory(rootPackage.id), file.path))
           this.write(join(publicDirectory, file.path), data, result, paths)
         }
@@ -387,11 +387,11 @@ export class ForgeInstaller {
         }
         this.states.set(manifest.plugin.id, { pluginId: manifest.plugin.id, revision: manifest.revision, name: manifest.plugin.name, version: manifest.plugin.version, status: result.status === 'active' || result.status === 'disabled' ? result.status : 'activation-failed', ...result.message === undefined ? {} : { message: result.message } })
         if (result.status === 'active' || result.status === 'disabled') {
-          const currentFiles = new Set(rootPackage.files.map(file => file.path))
+          const currentFiles = new Set(rootPackage.files.filter(file => file.path !== rootPackage.entry).map(file => file.path))
           for (const previous of this.retired.get(manifest.plugin.id) ?? []) {
             const previousRoot = previous.packages.find(pkg => pkg.id === previous.plugin.packageId)
             for (const file of previousRoot?.files ?? []) {
-              if (file.path === 'index.js' || currentFiles.has(file.path)) continue
+              if (file.path === previousRoot?.entry || file.path === 'index.js' || currentFiles.has(file.path)) continue
               const obsolete = join(publicDirectory, file.path)
               this.options.vfs.rmSync(obsolete, { force: true })
               paths.push(obsolete)

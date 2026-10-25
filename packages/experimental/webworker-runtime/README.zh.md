@@ -46,11 +46,11 @@ kind: "package-library"
 <a id="forge-plugin-updates"></a>
 ## Forge 插件更新
 
-预览页面通过 `?forge=<HTTP 服务地址>` 打开可选控制面板。**DSH Forge** 将 TypeScript Host 插件源码或 npm 包规格提交给该服务，并通过运行中的 Worker 应用编译清单。rc.2 前端内嵌 `FORGE_GENERATION = 'dsh-worker-rc2-2'`，在下载或写入前拒绝其他代际的产物。服务必须面向同一代际以及基础镜像提供的准确宿主包版本。核心包和共享宿主模块由前端构建提供。目标单独声明 `clientPackages`，在应用 overlay 前从可信基础镜像捕获；页面共享包的准确版本用于满足 Client 依赖，不授予 Host 导入能力。缺失或不匹配的 Client 依赖，以及替换共享 Client 包的尝试，均在文件写入前拒绝。带有受支持的单入口 `dsh.bundle` patch 的发布包可以携带现成的 Client bundle；包元数据和资源进入普通 Client 图及 HMR 路径。
+预览页面通过 `?forge=<HTTP 服务地址>` 打开可选控制面板。**DSH Forge** 将 TypeScript Host 插件源码或 npm 包规格提交给该服务，并通过运行中的 Worker 应用编译清单。rc.2 前端内嵌 `FORGE_GENERATION = 'dsh-worker-rc2-3'`，在下载或写入前拒绝其他代际的产物。服务必须面向同一代际以及基础镜像提供的准确宿主包版本。核心包和共享宿主模块由前端构建提供。目标单独声明 `clientPackages`，在应用 overlay 前从可信基础镜像捕获；页面共享包的准确版本用于满足 Client 依赖，不授予 Host 导入能力。缺失或不匹配的 Client 依赖，以及替换共享 Client 包的尝试，均在文件写入前拒绝。带有受支持的单入口 `dsh.bundle` patch 的发布包可以携带现成的 Client bundle；包元数据和资源进入普通 Client 图及 HMR 路径。
 
 安装器在修改文件前校验完整清单、受支持的 bundle patch 和缺失产物的字节。支持的 bundle patch 必须只包含一次自包 `insert`，条目仅含 `id`、`name` 及可选的 JSON 兼容字面量 `config`（对象、数组、标量或 null），配置结构由插件自行校验。安装器保留包含配置的原始 patch 字节；额外条目字段（包括 `disabled`）、非有限数字、YAML 别名和非 JSON 标签均在写入前拒绝。发布的 bundle 使用 profile 原生的 `dsh.profile.bundles` 选择及其原始 patch id；更新会删除旧的 Forge 注册行，使原生控制和 Forge 共用一个实例。更新保留原生禁用选择并报告 `disabled`；已安装状态查询读取当前选择和实时 Loader 条目。不含 bundle 元数据的插件使用 Forge 管理的 profile patch 行。无关的 profile 字段和 patch 行保持不变。
 
-按引用方解析的包映射支持独立依赖版本，无需文件系统软链接。路径稳定的入口包装文件引用当前不可变包，由 Cordis HMR 检测文件变更。协调过程要求所选 bundle 的真实条目 id，并确认实时激活。失败时保留包文件及诊断，但不保证恢复旧实例。删除先取消选择并卸载插件，再回收无共享引用的文件；卸载失败时保留其依赖声明和文件。
+按引用方解析的包映射支持独立依赖版本，无需文件系统软链接。路径稳定的入口包装文件引用当前不可变包，由 Cordis HMR 检测文件变更。不可变包保留发布入口及资源的相对路径，使 `import.meta.url` 能在该包中定位相邻的 skill 和数据。公开镜像将根包装入口与实现分开，并提供 Client 和资源文件；更新在成功激活后删除过期的镜像资源，卸载时目录回收也通过同一套 VFS 和批次通知报告。协调过程要求所选 bundle 的真实条目 id，并确认实时激活。失败时保留包文件及诊断，但不保证恢复旧实例。删除先取消选择并卸载插件，再回收无共享引用的文件；卸载失败时保留其依赖声明和文件。
 
 配置后的 Worker 通过 `node:child_process` 提供限定于当前 profile 的虚拟 `dsh plugin --profile <profile> add|update|remove <npm-package>` 命令。安装在 Forge 编译、文件校验应用和 Host 协调完成后才报告成功。同步调用可以检查本地命令和版本元数据，但不能执行远程工作。预览页面将同源 `/api/` 和 `/dsh-plugin-hub` Fetch 请求转给 Worker，包括发布插件直接调用的 Host 路由。查询字符串、方法、头部、请求体和取消均保留；同源 Origin 头与合成 Host 一起转换。静态资源、外域和相似路径名使用原页面 Fetch。路由错误不会重试静态服务器。合成请求的异步迭代和 `data`/`end`/`error` 监听共享同一个兼容 Node 的 Readable 请求体，`setEncoding()` 保留跨分块的字符序列。取消交换或完成响应会取消未读输入。
 

@@ -1,6 +1,8 @@
 /** Artifact verification, scoped package loading and VFS-visible update batches. */
 import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
+import { lowerModuleSource } from '../src/compile/transform.ts'
 import { ForgeInstaller } from '../src/forge/installer.ts'
 import { FORGE_GENERATION, type ForgeManifest } from '../src/forge/protocol.ts'
 import { editForgeProfilePatch } from '../src/forge/profile-patch.ts'
@@ -27,7 +29,9 @@ function fixture(clientPackages?: Readonly<Record<string, string>>) {
   vfs.seed('/dsh/home/profiles/web/cordis.patch.yml', '- id: unrelated\n  disabled: !!js process.env.FLAG\n')
   vfs.seed('/dsh/node_modules/host-lib/package.json', JSON.stringify({ name: 'host-lib', version: '1.0.0', main: 'index.js' }))
   vfs.seed('/dsh/node_modules/host-lib/index.js', 'exports.shared = {}')
-  const modules = new WorkerModuleLoader({ vfs, staticModules: {} })
+  const modules = new WorkerModuleLoader({ vfs, staticModules: {
+    'node:fs': () => ({ readFileSync: (path: URL, encoding: 'utf8') => vfs.readFileSync(fileURLToPath(path), encoding) }),
+  } })
   const artifacts = new Map<string, string>()
   const writes: string[] = []
   vfs.subscribe((event) => { writes.push(event.path) })
@@ -100,11 +104,11 @@ it('resolves two versions by importer and retains a dependency used by another i
 it('rejects the preceding frontend generation before downloading or writing', async () => {
   const f = fixture()
   const { manifest } = plan()
-  manifest.generation = 'dsh-worker-rc2-1'
+  manifest.generation = 'dsh-worker-rc2-2'
   for (const pkg of manifest.packages) {
-    for (const file of pkg.files) file.objectKey = `dsh-worker-rc2-1/objects/${file.sha256}`
+    for (const file of pkg.files) file.objectKey = `dsh-worker-rc2-2/objects/${file.sha256}`
   }
-  expect(f.installer.target().generation).toBe('dsh-worker-rc2-2')
+  expect(f.installer.target().generation).toBe('dsh-worker-rc2-3')
   await expect(f.installer.install(manifest, 'http://forge.local')).rejects.toMatchObject({ code: 'generation-mismatch' })
   expect(f.calls).toEqual([])
   expect(f.writes).toEqual([])
@@ -436,4 +440,72 @@ it.each(['[]', '[1, false, null]', 'null', '1', 'false', '"value"'])('retains li
   expect(await f.installer.install(first.manifest, 'http://forge.local')).toMatchObject({ status: 'active' })
   expect(f.vfs.readFileSync('/dsh/home/profiles/web/node_modules/plugin-one/cordis.patch.yml', 'utf8')).toBe(patch)
   expect(f.required).toEqual([['native-one']])
+})
+
+
+it('executes a nested published entry beside its resources and reports resource updates and removal', async () => {
+  const f = fixture()
+  const profile = '/dsh/home/profiles/web'
+  const publicDirectory = `${profile}/node_modules/plugin-one`
+  const batches: { phase: string; paths: readonly string[] }[] = []
+  f.installer.subscribe((event) => { batches.push({ phase: event.phase, paths: event.paths }) })
+  const resourcePlan = (entry: string, skill: string, resourceName: string) => {
+    const code = lowerModuleSource({ filename: entry, source: `
+      import { readFileSync } from 'node:fs'
+      export const entryUrl = import.meta.url
+      export const skill = readFileSync(new URL('../skills/${resourceName}', import.meta.url), 'utf8')
+    ` }).code
+    const result = publishedPlan(code)
+    const rootPackage = result.manifest.packages[0]
+    if (rootPackage === undefined) throw new Error('Root package is missing')
+    const codeFile = rootPackage.files.find(file => file.path === 'index.js')
+    if (codeFile === undefined) throw new Error('Entry artifact is missing')
+    codeFile.path = entry
+    rootPackage.id = hash(code + skill + entry)
+    rootPackage.entry = entry
+    rootPackage.metadata = { ...rootPackage.metadata, exports: { '.': `./${entry}`, './package.json': './package.json' } }
+    rootPackage.files.push({ path: `skills/${resourceName}`, sha256: hash(skill), size: Buffer.byteLength(skill), objectKey: `${FORGE_GENERATION}/objects/${hash(skill)}` })
+    result.files.set(hash(skill), skill)
+    result.manifest.plugin.packageId = rootPackage.id
+    result.manifest.plugin.entry = entry
+    result.manifest.revision = hash(rootPackage.id)
+    return result
+  }
+  const first = resourcePlan('lib/index.js', '# First skill', 'first.md')
+  for (const pair of first.files) f.artifacts.set(...pair)
+  await f.installer.install(first.manifest, 'http://forge.local')
+  const immutable = `${profile}/plugins/.forge/packages/${first.manifest.plugin.packageId}`
+  expect(f.modules.requireFrom(profile)('plugin-one')).toEqual({
+    entryUrl: `file://${immutable}/lib/index.js`, skill: '# First skill',
+  })
+  expect(f.vfs.existsSync(`${publicDirectory}/lib/index.js`)).toBe(false)
+  expect(f.vfs.readFileSync(`${publicDirectory}/skills/first.md`, 'utf8')).toBe('# First skill')
+  expect(JSON.parse(f.vfs.readFileSync(`${immutable}/package.json`, 'utf8') as string)).toMatchObject({ main: 'lib/index.js', exports: { '.': './lib/index.js' } })
+  expect(JSON.parse(f.vfs.readFileSync(`${publicDirectory}/package.json`, 'utf8') as string)).toMatchObject({ main: 'index.js', exports: { '.': './index.js' } })
+
+  const updated = resourcePlan('dist/main.js', '# Updated skill', 'updated.md')
+  for (const pair of updated.files) f.artifacts.set(...pair)
+  await f.installer.install(updated.manifest, 'http://forge.local')
+  // The fixture's HMR seam does not execute Loader reconciliation; expire its wrapper as the real HMR service does.
+  f.modules.hmrModules.invalidate([`file://${publicDirectory}/index.js`])
+  const updatedRoot = `${profile}/plugins/.forge/packages/${updated.manifest.plugin.packageId}`
+  expect(f.modules.requireFrom(profile)('plugin-one')).toEqual({
+    entryUrl: `file://${updatedRoot}/dist/main.js`, skill: '# Updated skill',
+  })
+  expect(f.vfs.existsSync(`${publicDirectory}/dist/main.js`)).toBe(false)
+  expect(f.vfs.existsSync(`${publicDirectory}/skills/first.md`)).toBe(false)
+  expect(f.vfs.existsSync(immutable)).toBe(false)
+  expect(f.writes).toContain(`${updatedRoot}/skills/updated.md`)
+  expect(f.writes).toContain(`${publicDirectory}/skills/first.md`)
+  expect(batches.at(-1)?.paths).toEqual(expect.arrayContaining([
+    `${updatedRoot}/skills/updated.md`, `${publicDirectory}/skills/updated.md`, `${publicDirectory}/skills/first.md`,
+  ]))
+
+  f.setActive(false)
+  const beforeRemove = f.writes.length
+  expect(await f.installer.remove('one')).toMatchObject({ status: 'removed' })
+  expect(f.vfs.existsSync(updatedRoot)).toBe(false)
+  expect(f.vfs.existsSync(publicDirectory)).toBe(false)
+  expect(f.writes.slice(beforeRemove)).toEqual(expect.arrayContaining([updatedRoot, publicDirectory]))
+  expect(batches.at(-1)?.paths).toEqual(expect.arrayContaining([updatedRoot, publicDirectory]))
 })
