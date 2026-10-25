@@ -46,6 +46,14 @@ export {
   type PreviewFixtureManifest, type PreviewFixtureManifestEntry,
 } from './fixture-manifest.ts'
 export { loadVfsImage, loadVfsOverlay, MemoryVfs } from './storage/memory.ts'
+export {
+  VfsPersistenceController, type VfsPersistenceStatus, type VfsPersistenceProvider,
+  type VfsStorageSnapshot, type VfsStoredRecord, type VfsStorageOperation,
+} from './storage/persistence.ts'
+export {
+  IndexedDbVfsProvider, vfsPersistenceNamespace, type VfsPersistenceNamespace, type VfsPersistenceIdentity,
+} from './storage/indexeddb.ts'
+export { VfsPersistenceError } from './storage/persistence-validation.ts'
 export { inflateImage, inflateImageStream } from './storage/image-gzip.ts'
 export { packTar, parseTar, type TarEntry } from './storage/tar.ts'
 export { requireActiveVfs, setActiveVfs } from './storage/active.ts'

@@ -14,6 +14,7 @@ kind: "package-library"
 ## 目录
 
 - [使用本包](#use-this-package)
+- [浏览器持久化](#browser-persistence)
 - [Forge 插件更新](#forge-plugin-updates)
 - [出站 HTTP 提供器](#outbound-http-providers)
 - [模型体验](#model-experience)
@@ -29,7 +30,7 @@ kind: "package-library"
 
 一条 tsdown 管线产出三个构建产物；另有一层由源码维护的进程实现：
 
-- **`lib/index.js`（装配库）**——`createWorkerHost`/`startWorkerHost` 挂载基础镜像和按序排列的数据 overlays（`storage/`）、登记镜像的懒加载归档、安装模块加载器（`module-system/`）与 `process` shim、经镜像自带的 `dsh-app-boot` 启动插件树，并把服务 seam 交给隧道。Overlay 只能替换 `home/` 与 `workspace/` 下的文件，不能替换基础 manifest 或模块。镜像布局契约（`image-layout.ts`：虚拟根、manifest 路径、懒加载归档目录、空目录）与 manifest（`image-manifest.ts`：profile、安装清单、`lowered` 包装契约门、懒加载归档）与 packer 共享。Worker 按启动器的方式启动 manifest 指定的随附 profile：镜像里的 app-boot 用随附模板初始化 `home/profiles/<profile>/`，从镜像单独携带的安装 manifest 解析 bundle，并合成各 bundle 层、profile patch 与 home patch。profile 上下文、启动环境快照，以及不带运行时 resolution 的 `PluginPackages` 服务都按启动器的方式提供；模块解析由 Worker 加载器负责。profile 上下文不带命令行 overlay；packer 按 `PLATFORM_ENTRY_CONFIG` 写入镜像的 home patch（`home/cordis.patch.yml`），使 JSONL Session 日志保持明文。ConfigEditor 将覆盖值持久化到 profile patch，协调每次写入，Loader 提交实时值。Worker 在隧道开始服务后提交 `appReady`。其 `hmrModules` provider 将 Worker 模块缓存接入 [profile HMR](../../boot/hmr/README.zh.md)，使配置和已加载代码的变化共用现有重载队列。插件管理可以列出并开关安装提供的 optional bundle，其包操作会因 `execa` 拒绝而失败。配置修改在当前 Worker 生命周期内有效。
+- **`lib/index.js`（装配库）**——`createWorkerHost`/`startWorkerHost` 挂载基础镜像和按序排列的数据 overlays（`storage/`）、登记镜像的懒加载归档、安装模块加载器（`module-system/`）与 `process` shim、经镜像自带的 `dsh-app-boot` 启动插件树，并把服务 seam 交给隧道。Overlay 只能替换 `home/` 与 `workspace/` 下的文件，不能替换基础 manifest 或模块。镜像布局契约（`image-layout.ts`：虚拟根、manifest 路径、懒加载归档目录、空目录）与 manifest（`image-manifest.ts`：profile、安装清单、`lowered` 包装契约门、懒加载归档）与 packer 共享。Worker 按启动器的方式启动 manifest 指定的随附 profile：镜像里的 app-boot 用随附模板初始化 `home/profiles/<profile>/`，从镜像单独携带的安装 manifest 解析 bundle，并合成各 bundle 层、profile patch 与 home patch。profile 上下文、启动环境快照，以及不带运行时 resolution 的 `PluginPackages` 服务都按启动器的方式提供；模块解析由 Worker 加载器负责。profile 上下文不带命令行 overlay；packer 按 `PLATFORM_ENTRY_CONFIG` 写入镜像的 home patch（`home/cordis.patch.yml`），使 JSONL Session 日志保持明文。ConfigEditor 将覆盖值持久化到 profile patch，协调每次写入，Loader 提交实时值。Worker 在隧道开始服务后提交 `appReady`。其 `hmrModules` provider 将 Worker 模块缓存接入 [profile HMR](../../boot/hmr/README.zh.md)，使配置和已加载代码的变化共用现有重载队列。插件管理可以列出并开关安装提供的 optional bundle，其包操作会因 `execa` 拒绝而失败。未接入持久化控制器时，配置修改在当前 Worker 生命周期内有效。
 - **懒加载归档**——manifest 按路径和大小登记 packer 移出基础镜像的每个页面 chunk，并给出相对镜像 URL 的归档名。存在性、stat 和目录列表立即作答；第一次异步读取（`fs.promises.readFile`、`fs.promises.open`、`fs.createReadStream`、`fs.promises.cp`）为所有等待中的读取方只拉取并解压一次该归档，按登记内容校验后挂载其文件，不发布 mutation。拉取失败时本次读取被拒绝，文件保持登记状态，下次读取会重新拉取。在此之前，对已登记文件的同步读取、写入、追加、截断、chmod、rename 和 link 会以 `ERR_DSH_VFS_DEFERRED` 失败，错误中写明归档名；unlink 和递归删除会移除登记，再次 seed 该路径会替换登记。归档名由内容摘要派生，拉取时只校验登记的路径和大小，不校验摘要。登记了懒加载归档的镜像必须以 URL 传入。
 - **`lib/worker.js`（worker 束）**——装配库加本包的 Node 兼容层，合成一个自含 ES module。模块代理表（`module-proxies.ts`）是唯一平台叉口：`node:*` 内建走 VFS、隧道和浏览器原语，浏览器做不到的走结构化 stub（调用即在 console 报错并抛出），native/binary 包则替换执行后端。`node:module` 在镜像 package 根之上提供 `createRequire().resolve` 与 `.resolve.paths()`，使未修改的包无需执行目标模块即可发现 manifest。`node-addon-require-builtin` 应答 vendor Loader、app-boot 和 HMR 在没有 `--expose-internals` 时读取的 Node v24.18.0 internal 模块：cascaded ESM loader 的 `resolveSync` 和 `import` 经 Worker 加载器完成，失败时带 Node 的 `ERR_MODULE_NOT_FOUND` 与 `ERR_PACKAGE_PATH_NOT_EXPORTED` 错误码，`loadCache` 为空；HMR 会替换的 CommonJS loader、package reader、`modules` binding 与 resolve cache 成员被调用时拒绝。`process.versions.node` 报告 `24.18.0`，因此 `ModuleLoader.fromInternal()` 和 Loader 的 `internal` 拿到的是这个 cascaded loader。`node:path.win32.isAbsolute` 与 `node:util.inherits` 与 Node 一致，其余 `win32` 成员抛出。`node:util` 的 JSON 数据比较器检查可枚举的自有属性，使 `__proto__` 等记录字段的准入判定与 Node 一致。全局 `process` shim 带有包括 `title` 在内的 Node 环境识别字段，避免 Worker 执行误入仅适用于 DOM 的分支。pack 期解析器会把名称静态可知的模块请求报告给 packer 的可达性遍历，其中包括通过 `node:module` 或 `module` 具名导入在模块作用域直接发起的 `createRequire(import.meta.url)('pkg')` 调用。保存、经 CommonJS 获取或另设基准的 `createRequire` 调用需要镜像入口种子。VFS mutation 驱动 `node:fs` 的 callback、polling 和 promise watcher，监听回调运行在创建 watcher 时的异步上下文中，而不是写入方代码的上下文中；打开的 descriptor 在 rename、replacement 和 unlink 后仍保留文件身份与访问模式，只要文件名仍指向该文件，`FileHandle.stat({ bigint: true })` 报告的 device 与 inode 身份就与路径 stat 相同，`FileHandle.chmod()` 则更新打开文件身份的权限；`readable-stream` 提供 `node:stream/promises` 的完成等待与管道方法，以及文件流以及 Chokidar、readdirp 等未修改镜像包所用的流状态机。`node:string_decoder` 使用维护中的 npm 解码器，在流分块之间保留未完整接收的 UTF-8 和 UTF-16 字符。AsyncLocalStorage 经 pack 时降低注入的 snapshot/restore 面在 `await` 间携带同步栈因果。worker 不带编译器：packer 未降低的镜像在挂载时被拒。回调式 `fs.realpath.native` 别名在已挂载的 VFS 内解析路径，并支持 `util.promisify`。
 - **`src/shell/`（worker 自己的进程层）**——浏览器 worker 无法 fork，所以 `node:child_process` 不是 stub 而是实现：`spawn` 把命令放进它自己的 Web Worker——就是这同一个束，由首帧告诉它「你是 shell 进程」——并以 subprocess 服务消费的 `ChildProcess` 面报告结果。命令不占宿主线程，`SIGKILL` 不管它在干什么都能终止它，而它只能靠消息触达 VFS（由宿主应答这些帧）。Worker 平台 executable 在不替换 JavaScript 包、也不把具体实现耦合进 `node:child_process` 的情况下保持 Landlock 等 native 包协议；`xdg-open` 把一个 VFS 文本文件交给页面的只读查看器，因此 **打开配置文件** 等桌面打开操作会在页面内显示该文件；普通命令使用本包的求值器与 coreutils 命令表。语法来自 `@yarnpkg/parsers` 的 `parseShell`，而 `execSync`/`fork` 依然拒绝，因为它们需要真进程。
@@ -40,6 +41,21 @@ kind: "package-library"
 验收在 `apps/web/tests/preview-boot.e2e.ts`：静态服务真实构建页面，在 headless Chromium 里驱动 pre-boot 选择面板与 Worker 激活。空白选择验证首次启动；`vfs-example` overlay 提供普通 workspace 文件与明文 persistence 产物，无需模型请求即可验证 Workspace/Session 冷发现、工具呈现、subagent 导航和历史分页。showcase 混排空字符串、纯空白与非空推理块，并包含多行长命令和父路径文件链接；这些是人工构造的 fixture，不是真实模型输出。[打包器](../webworker-packer/README.zh.md)在 Node 中根据已提交的历史日志准备当前代后继文件；这些源日志在 overlay 中逐字节保持不变。fixture 生成器负责验收测试的当前投影缓存。选择面板为 WebFS 保留独立的用户授权来源；该 provider 不读取内置 fixture。
 
 [已构建 bundle 导入检查](tests/compile/transform-corpus-check.ts)在库构建后检查裸 Node 导入。Dockkit 例外接受 Node 针对任意样式表报告的未知 `.css` 扩展名错误，而不限定某一固定路径；其他扩展名、错误码或消息，以及意外成功的豁免导入，仍然报错。
+
+-----
+
+<a id="browser-persistence"></a>
+## 浏览器持久化
+
+Forge 预览默认启用 IndexedDB 存储；`?storage=none` 选择临时 Worker，不清除已保存的数据。页面顶部工具栏报告待保存、已保存或失败状态，并提供显式保存操作。已保存表示存储事务已完成；同步文件系统写入成功本身不确认持久化。页面卸载不作为保存保证。写入保存后，刷新页面会在 Cordis 启动前恢复插件安装、原生启停选择、配置、Session 文件和工作区文件。
+
+`VfsPersistenceController` 将 VFS mutation sink 接入可替换的 `VfsPersistenceProvider`。仅 `home/` 和 `workspace/` 下的运行时变更进入存储；基础镜像模块与未修改的模板文件仍由静态镜像提供。`IndexedDbVfsProvider` 分开存储节点元数据和 64 KiB 文件块。后续追加只写变化的尾块及新增块，删除记录则确保从基础镜像重建时不会复活已删除文件。权限与已记录的修改时间会恢复；硬链接的 inode 身份不跨 Worker 生命周期保留。Session 日志格式不变。恢复仍会在 RAM 中重建这些文件；此提供者不会将 VFS 改为磁盘后端。正在执行的请求、插件变量和临时 DOM 修改不会恢复。
+
+存储命名空间包含存储结构版本、内嵌 Forge 代际、部署和所选镜像及 overlay 来源。浏览器 Origin 另外隔离各自的数据库。其他代际或来源选择独立命名空间，旧数据保留；不自动迁移，也不跨版本加载插件。提供者应用操作组前，以原子方式比较修订号。过期标签页以 `STORAGE_CONFLICT` 停止镜像，保留较新的已提交数据。存储失败时，当前内存中的改动仍可用，但未获确认；工具栏持续报告失败，控制器不会隐式重试。无效的存储快照或 Forge 清单会阻止启动，并保留原数据，不以默认值覆盖。已保存的不可变 `.forge/packages` 产物必须保持记录中的哈希；直接编辑其字节会阻止清单恢复。
+
+Forge 清单记录已应用的 manifests 和保留产物的所有权，与激活结果独立。安装在等待 Cordis 协调前，将代码、生成的包元数据、Profile 注册及清单纳入一次同步持久化批次。删除先取消选择并卸载插件，再将文件回收与清单删除组合提交。新 Worker 在 Profile 合成前校验已保存产物并恢复按引用方解析的映射，随后由原生 Loader 状态决定激活结果。因此已安装包可在不联系 Forge 的情况下启动；基础镜像与页面仍需各自的静态资源。对应操作由 [forge/catalog.ts](src/forge/catalog.ts) 和 [storage/persistence.ts](src/storage/persistence.ts) 中的清单与控制器实现负责。
+
+当前提供者使用浏览器本地存储，不实现原生 RPC 存储、云端同步、导出备份或跨标签页合并。清除站点数据会删除存储，配额和存储回收由浏览器管理。`createWorkerHost` 调用方通过 `persistence` 传入控制器来启用；未传入时，宿主保持临时模式。控制器拥有提供者直至释放，在宿主销毁后结算排队写入并关闭提供者。
 
 -----
 
@@ -56,7 +72,7 @@ Forge 准备声明的依赖包，并交付逐文件转换的模块，保留包�
 
 配置后的 Worker 通过 `node:child_process` 提供限定于当前 profile 的虚拟 `dsh plugin --profile <profile> add|update|remove <npm-package>` 命令。安装在 Forge 编译、文件校验应用和 Host 协调完成后才报告成功。同步调用可以检查本地命令和版本元数据，但不能执行远程工作。预览页面将同源 `/api/` 和 `/dsh-plugin-hub` Fetch 请求转给 Worker，包括发布插件直接调用的 Host 路由。查询字符串、方法、头部、请求体和取消均保留；同源 Origin 头与合成 Host 一起转换。静态资源、外域和相似路径名使用原页面 Fetch。路由错误不会重试静态服务器。合成请求的异步迭代和 `data`/`end`/`error` 监听共享同一个兼容 Node 的 Readable 请求体，`setEncoding()` 保留跨分块的字符序列。取消交换或完成响应会取消未读输入。
 
-所有文件变更均使用普通 VFS mutation。`ForgeInstaller.subscribe()` 提供文件应用和激活的批次通知，VFS 订阅者则观察单个写入和删除。两种通知都不确认持久化完成。Forge 将已安装根包映射到 profile 的 `node_modules`；`createRequire(anchor).resolve.paths()` 提供锚点的各级父目录包搜索路径，使标准 bundle 清单无需 `./package.json` 导出即可发现这些包。安装状态仅在当前 Worker 生命周期内有效；刷新页面即丢失。[安装器](src/forge/installer.ts) 负责这些操作，[协议校验器](src/forge/protocol.ts) 负责清单准入。
+所有文件变更均使用普通 VFS mutation。`ForgeInstaller.subscribe()` 提供文件应用和激活的批次通知，VFS 订阅者则观察单个写入和删除。两种通知都不确认持久化完成。Forge 将已安装根包映射到 profile 的 `node_modules`；`createRequire(anchor).resolve.paths()` 提供锚点的各级父目录包搜索路径，使标准 bundle 清单无需 `./package.json` 导出即可发现这些包。未接入持久化提供者时，安装状态仅在当前 Worker 生命周期内有效；使用[浏览器持久化](#browser-persistence)时，已应用产物和所有权会在启动前恢复。[安装器](src/forge/installer.ts) 负责这些操作，[协议校验器](src/forge/protocol.ts) 负责清单准入。
 
 -----
 

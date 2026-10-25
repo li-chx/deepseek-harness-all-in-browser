@@ -171,15 +171,17 @@ const processBoundTests = [
   'packages/workflow/workflow-ptc/tests/workflow-ptc.spec.ts',
 ]
 
-// Claude Code's test-kit module names, served by the mods bridge's test support so the example mods' tests import them unchanged.
-const claudeCodeTestingAliases = {
+const sourceTestingAliases = {
+  // Preview tests consume the page entry source without requiring prebuilt runtime artifacts.
+  '@deepseek-ai/dsh-experimental-webworker-runtime/client': fileURLToPath(new URL('./packages/experimental/webworker-runtime/src/client/index.ts', import.meta.url)),
+  // The mods bridge supplies Claude Code's test-kit entries.
   'claude-code/testing': fileURLToPath(new URL('./packages/experimental/claude-code-mods/tests/support/claude-code-testing.ts', import.meta.url)),
   'claude-code': fileURLToPath(new URL('./packages/experimental/claude-code-mods/tests/support/claude-code.ts', import.meta.url)),
 }
 
 export default defineConfig({
   plugins: [pathsPlugin(), standardDecoratorPlugin()],
-  resolve: { alias: claudeCodeTestingAliases },
+  resolve: { alias: sourceTestingAliases },
   test: {
     ...localWorkerBudget,
     setupFiles: ['./scripts/test-proxy-environment.ts', './scripts/test-dom-environment.ts'],
@@ -191,7 +193,7 @@ export default defineConfig({
     projects: [
       {
         plugins: [pathsPlugin(), standardDecoratorPlugin()],
-        resolve: { alias: claudeCodeTestingAliases },
+        resolve: { alias: sourceTestingAliases },
         test: {
           name: 'thread-safe',
           execArgv: vitestExecArgv,
@@ -211,7 +213,7 @@ export default defineConfig({
       },
       {
         plugins: [pathsPlugin(), standardDecoratorPlugin()],
-        resolve: { alias: claudeCodeTestingAliases },
+        resolve: { alias: sourceTestingAliases },
         test: {
           name: 'process-bound',
           execArgv: vitestExecArgv,

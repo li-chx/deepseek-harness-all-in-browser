@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseInboundFrame } from '../../src/transport/frames.ts'
+import { parseInboundFrame, parseStorageStatus } from '../../src/transport/frames.ts'
 
 describe('tunnel init frame', () => {
   it('retains the selected overlay order', () => {
@@ -50,4 +50,23 @@ describe('tunnel request bodies', () => {
       t: 'req', id: 4, method: 'POST', url: '/bad', headers: {}, body: 'large',
     })).toThrow('body must be an ArrayBuffer, Blob, or ReadableStream')
   })
+})
+
+describe('browser persistence frames', () => {
+  it('retains source and deployment identity without accepting a page-selected generation', () => {
+    expect(parseInboundFrame({ t: 'init', image: 'base.tar.gz', overlays: [], storage: { kind: 'indexeddb', source: 'none', deployment: 'app', generation: 'untrusted' } }))
+      .toEqual({ t: 'init', image: 'base.tar.gz', overlays: [], storage: { kind: 'indexeddb', source: 'none', deployment: 'app' } })
+  })
+  it.each([null, {}, { kind: 'rpc', source: 'none', deployment: 'app' }, { kind: 'indexeddb', source: '', deployment: 'app' }])('rejects invalid storage selection %j', (storage) => {
+    expect(() => parseInboundFrame({ t: 'init', image: 'base.tar.gz', overlays: [], storage })).toThrow('invalid storage configuration')
+  })
+})
+
+
+it('accepts commit status and rejects a saved claim with uncommitted changes', () => {
+  expect(parseStorageStatus({ kind: 'saved', revision: 2, pending: 0 })).toEqual({ kind: 'saved', revision: 2, pending: 0 })
+  expect(parseStorageStatus({ kind: 'failed', revision: 2, pending: 1, error: { code: 'STORAGE_CONFLICT', message: 'stale writer' } }))
+    .toMatchObject({ kind: 'failed', error: { code: 'STORAGE_CONFLICT' } })
+  expect(() => parseStorageStatus({ kind: 'saved', revision: 2, pending: 1 })).toThrow('invalid status')
+  expect(() => parseStorageStatus({ kind: 'failed', revision: 2, pending: 1 })).toThrow('missing failure details')
 })

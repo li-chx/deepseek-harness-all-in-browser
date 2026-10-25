@@ -1,0 +1,39 @@
+:global(body[data-preview-storage-layout]) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+:global(body[data-preview-storage-layout] > #root) {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
+.bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  color: var(--dsw-alias-label-primary, CanvasText);
+  background: var(--dsw-alias-bg-base, Canvas);
+  border-bottom: 1px solid var(--dsw-alias-border-l2, ButtonBorder);
+  font: 13px/20px var(--dsw-font-family, sans-serif);
+}
+
+.message { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.actions button {
+  position: static;
+  transform: none;
+  color: inherit;
+  background: inherit;
+  border: 1px solid var(--dsw-alias-border-l2, ButtonBorder);
+  border-radius: var(--dsw-radius-sm, 8px);
+  padding: 4px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+.actions button:disabled { cursor: wait; opacity: 0.65; }
+@media (max-width: 560px) { .bar { flex-wrap: wrap; gap: 6px; } .message { flex-basis: 100%; } }

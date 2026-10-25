@@ -13,6 +13,10 @@
 // Straight to the assembly, not through the package barrel: the barrel also
 // publishes the pack-time transform, whose acorn dependency would then be bundled
 // into this worker — which never parses JavaScript.
+import { parseInboundFrame, type TunnelStorageStatusFrame } from './transport/frames.ts'
+import { VfsPersistenceController } from './storage/persistence.ts'
+import { IndexedDbVfsProvider, vfsPersistenceNamespace } from './storage/indexeddb.ts'
+import { FORGE_GENERATION } from './forge/protocol.ts'
 import { PortHttpTransport } from './transport/http-port.ts'
 import { createWorkerHost } from './worker-host.ts'
 import './node/builtin_modules/implemented/buffer.ts'
@@ -50,22 +54,26 @@ self.addEventListener('message', (event: MessageEvent) => {
     return
   }
   if (host === undefined && data !== null && typeof data === 'object' && data.t === 'init') {
-    if (typeof data.image !== 'string') {
-      throw new Error('webworker: init frame needs a string image url')
-    }
-    if (!Array.isArray(data.overlays) || data.overlays.some(overlay => typeof overlay !== 'string')) {
-      throw new Error('webworker: init frame needs an array of string overlay urls')
-    }
-    if (data.httpPort !== undefined && !(data.httpPort instanceof MessagePort)) throw new Error('webworker: invalid HTTP provider port')
-    const httpTransport = data.httpPort instanceof MessagePort ? new PortHttpTransport(data.httpPort) : undefined
+    const frame = parseInboundFrame(data)
+    if (frame.t !== 'init') throw new Error('webworker: expected init frame')
+    const httpTransport = frame.httpPort === undefined ? undefined : new PortHttpTransport(frame.httpPort)
+    const persistence = frame.storage === undefined ? undefined : new VfsPersistenceController(new IndexedDbVfsProvider({
+      namespace: vfsPersistenceNamespace({
+        generation: FORGE_GENERATION, source: frame.storage.source, deployment: frame.storage.deployment,
+      }),
+    }))
+    const releaseStorage = persistence?.subscribe((status) => {
+      self.postMessage({ t: 'storage-status', status } satisfies TunnelStorageStatusFrame)
+    })
     const created = createWorkerHost({
       ...httpTransport === undefined ? {} : { httpTransport },
+      ...persistence === undefined ? {} : { persistence },
       staticModules: createNodeBuiltins(),
       staticModulePrefixes: REPLACED_PREFIXES,
       requestListener: whenRequestListener,
       alsCausality,
-      image: data.image,
-      overlays: data.overlays as string[],
+      image: frame.image,
+      overlays: frame.overlays,
     })
     host = created
     for (const queued of pending) {
@@ -73,6 +81,7 @@ self.addEventListener('message', (event: MessageEvent) => {
     }
     pending.length = 0
     created.start().catch((error: unknown) => {
+      releaseStorage?.()
       httpTransport?.close()
       void error
       // start() already reported the failure to the page through tunnel.fail;

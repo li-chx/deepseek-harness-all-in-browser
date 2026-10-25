@@ -9,6 +9,7 @@
  * @module @deepseek-ai/dsh-experimental-webworker-runtime/client
  */
 import { serveHttpTransport } from '../transport/http-port.ts'
+import type { TunnelStorageInit } from '../transport/frames.ts'
 import type { HttpTransport } from '../transport/http-transport.ts'
 import { IMAGE_FILE_NAME } from '../image-layout.ts'
 import type { ClientFileUploadHooks } from '@deepseek-ai/dsh-client-file-upload/types'
@@ -21,6 +22,8 @@ export { serveHttpTransport, PortHttpTransport } from '../transport/http-port.ts
 export { WorkerHttpTransport, type HttpTransport, type HttpFetch } from '../transport/http-transport.ts'
 export { WorkerTunnel, type TunnelFetch } from './client.ts'
 export { applyIndexInjections } from './apply-injections.ts'
+export { parseStorageStatus, type TunnelStorageInit } from '../transport/frames.ts'
+export type { VfsPersistenceStatus } from '../storage/persistence-types.ts'
 export { IMAGE_FILE_NAME } from '../image-layout.ts'
 export {
   parsePreviewFixtureManifest, PREVIEW_FIXTURE_MANIFEST_FILE, PREVIEW_FIXTURE_MANIFEST_VERSION,
@@ -50,6 +53,8 @@ interface ClientFileUploadGlobal {
 
 /** Inputs for {@link connectWorkerHost}. */
 export interface WorkerHostConnectOptions {
+  /** Isolated browser persistence; omission keeps the filesystem ephemeral. */
+  readonly storage?: TunnelStorageInit
   /** Page-owned outbound HTTP provider, reached through a dedicated port with streaming and abort frames. */
   readonly httpTransport?: HttpTransport
   /**
@@ -168,6 +173,7 @@ export async function connectWorkerHost(worker: Worker, options?: WorkerHostConn
       new URL(options?.image ?? IMAGE_FILE_NAME, document.baseURI).href,
       (options?.overlays ?? []).map(overlay => new URL(overlay, document.baseURI).href),
       httpPort,
+      options?.storage,
     )
     const payload = await tunnel.bootPayload()
     ;(globalThis as ClientTransportGlobal).__DSH_TRANSPORT__ = {

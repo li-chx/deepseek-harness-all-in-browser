@@ -9,9 +9,19 @@ import {
   chooseWorkerHostSource, connectWorkerHost, IMAGE_FILE_NAME,
 } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
 
+const { mountPreviewStorage, previewStorageOptions } = await import('./preview-storage.ts')
+
 const image = `preview/${IMAGE_FILE_NAME}`
 const source = await chooseWorkerHostSource({ image })
-await connectWorkerHost(new DshWorker({ name: 'dsh-host' }), { image, overlays: source.overlays })
+const storage = previewStorageOptions(new URL(location.href), new URL(image, document.baseURI), source.overlays)
+const storageUi = storage === undefined ? undefined : mountPreviewStorage()
+try {
+  const connection = await connectWorkerHost(new DshWorker({ name: 'dsh-host' }), { image, overlays: source.overlays, ...storage === undefined ? {} : { storage } })
+  storageUi?.connect(connection)
+} catch (error) {
+  storageUi?.fail(error)
+  throw error
+}
 
 const forge = new URL(location.href).searchParams.get('forge')
 if (forge) {
@@ -20,7 +30,10 @@ if (forge) {
     __DSH_TRANSPORT__?: { fetch: import('@deepseek-ai/dsh-experimental-webworker-runtime/client').TunnelFetch }
   }).__DSH_TRANSPORT__
   if (transport) {
-    const dispose = mountForgePreview(forge, transport.fetch)
+    const presentation = storageUi === undefined ? undefined : { launcherParent: storageUi.actions, persistentStorage: true }
+    const dispose = mountForgePreview(forge, transport.fetch, undefined, presentation)
     window.addEventListener('pagehide', dispose, { once: true })
   }
 }
+
+if (storageUi) window.addEventListener('pagehide', () => { storageUi.dispose() }, { once: true })

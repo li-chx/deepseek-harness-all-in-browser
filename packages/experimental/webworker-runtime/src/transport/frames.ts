@@ -4,6 +4,8 @@
  * @module @deepseek-ai/dsh-experimental-webworker-runtime/src/transport/frames
  */
 
+import type { VfsPersistenceStatus } from '../storage/persistence-types.ts'
+
 /** Request identifier minted by the page. */
 export type TunnelRequestId = string | number
 
@@ -53,6 +55,15 @@ export interface TunnelInitFrame {
   readonly t: 'init'
   readonly image: string
   readonly overlays: readonly string[]
+  readonly httpPort?: MessagePort
+  readonly storage?: TunnelStorageInit
+}
+
+/** Serializable browser storage selection; the Worker supplies its own build generation. */
+export interface TunnelStorageInit {
+  readonly kind: 'indexeddb'
+  readonly source: string
+  readonly deployment: string
 }
 
 /** Every frame the page sends the worker. */
@@ -141,8 +152,15 @@ export interface TunnelViewTextFrame {
   readonly text: string
 }
 
+/** Commit status emitted independently of HTTP responses. */
+export interface TunnelStorageStatusFrame {
+  readonly t: 'storage-status'
+  readonly status: VfsPersistenceStatus
+}
+
 /** Frames the worker emits. */
 export type TunnelOutboundFrame =
+  | TunnelStorageStatusFrame
   | TunnelViewTextFrame
   | TunnelResponseFrame
   | TunnelResponseHeadFrame
@@ -170,7 +188,18 @@ export function parseInboundFrame(data: unknown): TunnelInboundFrame {
     if (!Array.isArray(frame.overlays) || frame.overlays.some(overlay => typeof overlay !== 'string')) {
       throw new Error('webworker tunnel: init frame needs an array of string overlay urls')
     }
-    return { t: 'init', image: frame.image, overlays: frame.overlays as string[] }
+    if (frame.httpPort !== undefined && !(frame.httpPort instanceof MessagePort)) throw new Error('webworker tunnel: invalid HTTP provider port')
+    let storage: TunnelStorageInit | undefined
+    if (frame.storage !== undefined) {
+      if (typeof frame.storage !== 'object' || frame.storage === null) throw new Error('webworker tunnel: invalid storage configuration')
+      const value = frame.storage as Record<string, unknown>
+      if (value.kind !== 'indexeddb' || typeof value.source !== 'string' || !value.source || typeof value.deployment !== 'string' || !value.deployment) {
+        throw new Error('webworker tunnel: invalid storage configuration')
+      }
+      storage = { kind: 'indexeddb', source: value.source, deployment: value.deployment }
+    }
+    return { t: 'init', image: frame.image, overlays: frame.overlays as string[],
+      ...frame.httpPort === undefined ? {} : { httpPort: frame.httpPort }, ...storage === undefined ? {} : { storage } }
   }
   const id = frame.id
   if (typeof id !== 'string' && typeof id !== 'number') {
@@ -204,4 +233,26 @@ export function parseInboundFrame(data: unknown): TunnelInboundFrame {
     throw new Error(`webworker tunnel: request ${String(id)} body must be an ArrayBuffer, Blob, or ReadableStream`)
   }
   return { t: 'req', id, method: frame.method, url: frame.url, headers, body }
+}
+
+/**
+ * Validate a storage status received over the page transport.
+ * @param data - Worker status event or local HTTP response.
+ * @returns The commit state with validated counters and diagnostics.
+ */
+export function parseStorageStatus(data: unknown): VfsPersistenceStatus {
+  if (typeof data !== 'object' || data === null) throw new Error('webworker storage: invalid status')
+  const value = data as Record<string, unknown>
+  if (!['saved', 'pending', 'failed'].includes(String(value.kind))
+    || typeof value.revision !== 'number' || !Number.isSafeInteger(value.revision) || value.revision < 0
+    || typeof value.pending !== 'number' || !Number.isSafeInteger(value.pending) || value.pending < 0
+    || value.kind === 'saved' && value.pending !== 0) throw new Error('webworker storage: invalid status')
+  if (value.kind === 'failed') {
+    if (typeof value.error !== 'object' || value.error === null) throw new Error('webworker storage: missing failure details')
+    const error = value.error as Record<string, unknown>
+    if (typeof error.code !== 'string' || typeof error.message !== 'string') throw new Error('webworker storage: invalid failure details')
+    return { kind: 'failed', revision: value.revision, pending: value.pending, error: { code: error.code, message: error.message } }
+  }
+  if (value.kind !== 'saved' && value.kind !== 'pending') throw new Error('webworker storage: invalid state')
+  return { kind: value.kind, revision: value.revision, pending: value.pending }
 }

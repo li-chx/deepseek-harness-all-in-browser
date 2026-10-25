@@ -16,6 +16,7 @@ const english = {
   idle: 'Ready', busy: 'Working…', active: 'Active', disabled: 'Installed (disabled)', removed: 'Removed', failed: 'Activation failed',
   generation: 'Build generation', revision: 'Revision', downloaded: 'Downloaded files', written: 'Written files',
   unknownResult: 'The update was sent, but its result could not be confirmed. Refresh status before retrying.',
+  persistent: 'Changes are saved in this browser. Check the storage status before closing this page.',
   response: 'The server returned an invalid response.', target: 'The Forge server targets a different build generation.',
   packageTarget: 'The Forge server targets different shared package versions.',
   dependencyError: 'Dependencies must be a JSON object mapping package names to version strings.',
@@ -34,6 +35,7 @@ const chinese: Copy = {
   idle: '就绪', busy: '处理中…', active: '已激活', disabled: '已安装（已禁用）', removed: '已删除', failed: '激活失败',
   generation: '构建代际', revision: '修订', downloaded: '下载文件数', written: '写入文件数',
   unknownResult: '更新已发送，但无法确认结果。请先刷新状态再重试',
+  persistent: '更改保存在此浏览器中，关闭页面前请确认保存状态',
   response: '服务返回了无效响应', target: 'Forge 服务与当前页面的构建代际不一致',
   packageTarget: 'Forge 服务的共享包版本与当前页面不一致',
   dependencyError: '依赖必须是以包名为键、版本字符串为值的 JSON 对象',
@@ -89,9 +91,13 @@ function dependencies(text: string, copy: Copy): Record<string, string> {
  * @param serverUrl - Initial Forge endpoint selected by the preview URL.
  * @param hostFetch - Existing Worker transport used for target, install, and removal operations.
  * @param httpTransport - Optional outbound provider shared with Worker boot.
+ * @param presentation - Optional toolbar parent and browser-persistence notice.
  * @returns Disposer for the controls and their event listeners; closing the dialog preserves drafts.
  */
-export function mountForgePreview(serverUrl: string, hostFetch: TunnelFetch, httpTransport?: HttpTransport): () => void {
+export function mountForgePreview(serverUrl: string, hostFetch: TunnelFetch, httpTransport?: HttpTransport, presentation?: {
+  launcherParent?: HTMLElement
+  persistentStorage?: boolean
+}): () => void {
   const request = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
     httpTransport === undefined ? fetch(input, init) : httpTransport.fetch(new Request(input, init))
   const copy: Copy = navigator.language.startsWith('zh') ? chinese : english
@@ -115,7 +121,7 @@ export function mountForgePreview(serverUrl: string, hostFetch: TunnelFetch, htt
   const body = document.createElement('div')
   body.className = styles.body ?? ''
   const notice = document.createElement('p')
-  notice.textContent = copy.ephemeral
+  notice.textContent = presentation?.persistentStorage === true ? copy.persistent : copy.ephemeral
   const hint = document.createElement('p')
   hint.textContent = copy.hint
   const target = document.createElement('p')
@@ -154,7 +160,9 @@ export function mountForgePreview(serverUrl: string, hostFetch: TunnelFetch, htt
   installed.className = styles.installed ?? ''
   body.append(notice, hint, target, form, outcome, installedTitle, installed)
   dialog.append(header, body)
-  document.body.append(launcher, dialog)
+  const launcherParent = presentation?.launcherParent ?? document.body
+  launcherParent.append(launcher)
+  document.body.append(dialog)
   let busy = false
   let disposed = false
 

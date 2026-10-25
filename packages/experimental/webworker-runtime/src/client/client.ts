@@ -19,6 +19,8 @@ import type {
   TunnelStreamItemFrame,
   TunnelStreamOpenFrame,
 } from '../transport/frames.ts'
+import { parseStorageStatus, type TunnelStorageInit } from '../transport/frames.ts'
+import type { VfsPersistenceStatus } from '../storage/persistence-types.ts'
 import { showTextViewer } from './text-viewer.ts'
 
 /** Boot payload of the tunnel bootstrap route. */
@@ -158,6 +160,8 @@ const NULL_BODY_STATUS = new Set([101, 204, 205, 304])
 export class WorkerTunnel {
   private readonly worker: Worker
   private nextId = 1
+  private storageStatus: VfsPersistenceStatus | undefined
+  private readonly storageObservers = new Set<(status: VfsPersistenceStatus) => void>()
   private readonly unary = new Map<TunnelRequestId, PendingUnary>()
   private readonly bodyStreams = new Map<TunnelRequestId, ReadableStreamDefaultController<Uint8Array>>()
   private readonly logicalStreams = new Map<TunnelRequestId, LogicalStream>()
@@ -207,9 +211,21 @@ export class WorkerTunnel {
    * @param image - VFS image URL the worker fetches.
    * @param overlays - Ordered data overlay URLs applied before boot.
    * @param httpPort - Optional dedicated outbound HTTP provider channel.
+   * @param storage - Optional browser persistence selection.
    */
-  init(image: string, overlays: readonly string[] = [], httpPort?: MessagePort): void {
-    this.worker.postMessage({ t: 'init', image, overlays, httpPort }, httpPort === undefined ? [] : [httpPort])
+  init(image: string, overlays: readonly string[] = [], httpPort?: MessagePort, storage?: TunnelStorageInit): void {
+    this.worker.postMessage({ t: 'init', image, overlays, httpPort, ...storage === undefined ? {} : { storage } }, httpPort === undefined ? [] : [httpPort])
+  }
+
+  /**
+   * Observe commit status, replaying the latest status when available.
+   * @param listener - Page-owned observer; release it when its UI is removed.
+   * @returns Observer disposer; it does not stop the Worker or flush storage.
+   */
+  subscribeStorageStatus(listener: (status: VfsPersistenceStatus) => void): () => void {
+    this.storageObservers.add(listener)
+    if (this.storageStatus !== undefined) listener(this.storageStatus)
+    return () => { this.storageObservers.delete(listener) }
   }
 
   /** Fetch-shaped entry: one request frame, one Response (streamed when the worker streams). */
@@ -488,6 +504,14 @@ export class WorkerTunnel {
 
   private receive(frame: ResponseFrame): void {
     switch (frame.t) {
+      case 'storage-status': {
+        const status = parseStorageStatus(frame.status)
+        this.storageStatus = status
+        for (const listener of this.storageObservers) {
+          try { listener(status) } catch (error) { console.error('webworker storage: page observer failed', error) }
+        }
+        return
+      }
       case 'res': {
         const pending = this.unary.get(frame.id)
         if (pending === undefined) return

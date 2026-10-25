@@ -1,4 +1,5 @@
 /** Applies complete plugin plans through VFS mutations and Cordis reconciliation. */
+import { applyForgeMappings, forgeCatalog, forgePublicExports, type ForgeCatalog } from './catalog.ts'
 import { forgeSharedPackages } from './package-policy.ts'
 import { forgeBundleEntry, hasForgeProfileEntry } from './profile-patch.ts'
 import { sha256 } from '@noble/hashes/sha2.js'
@@ -6,7 +7,7 @@ import type Hmr from '@deepseek-ai/dsh-hmr'
 import type { MemoryVfs } from '../storage/memory.ts'
 import type { WorkerModuleLoader } from '../module-system/module-loader.ts'
 import { dirname, join, pathToFileUrl } from '../module-system/posix-path.ts'
-import { ForgeError, FORGE_GENERATION, parseForgeManifest, pluginId, object, type ForgeManifest, type ForgePackage, type ForgePackageExports } from './protocol.ts'
+import { ForgeError, FORGE_GENERATION, parseForgeManifest, pluginId, object, type ForgeManifest, type ForgePackage } from './protocol.ts'
 
 /** The current activation outcome; files may exist even when activation failed. */
 export interface ForgeInstalled {
@@ -41,6 +42,10 @@ export interface ForgeBatchEvent {
 
 /** Dependencies owned by one running Worker. */
 export interface ForgeInstallerOptions {
+  /** Catalog validated before profile boot; activation is read from the new Loader. */
+  restoredCatalog?: ForgeCatalog
+  /** Synchronous durable transaction grouping; never await inside the callback. */
+  withFileBatch?: (operation: () => void) => void
   vfs: MemoryVfs
   modules: WorkerModuleLoader
   profileDirectory: string
@@ -63,12 +68,6 @@ function digest(bytes: Uint8Array): string {
   return [...sha256(bytes)].map(value => value.toString(16).padStart(2, '0')).join('')
 }
 
-function publicExports(exports: ForgePackageExports | undefined): { [key: string]: ForgePackageExports } {
-  const subpaths = exports !== null && typeof exports === 'object' && !Array.isArray(exports)
-    && Object.keys(exports).some(key => key.startsWith('.')) ? exports : {}
-  return { ...subpaths, '.': './index.js' }
-}
-
 /** Plugin artifacts are owned by their manifest until explicitly replaced or removed. */
 export class ForgeInstaller {
   private readonly manifests = new Map<string, ForgeManifest>()
@@ -88,6 +87,15 @@ export class ForgeInstaller {
     this.clientPackages = Object.freeze({ ...options.clientPackages })
     this.hostPackages = Object.freeze({ ...options.hostPackages })
     this.sharedPackages = Object.freeze(forgeSharedPackages(this.hostPackages, this.clientPackages, options.staticSpecifiers))
+    for (const manifest of options.restoredCatalog?.manifests ?? []) {
+      this.manifests.set(manifest.plugin.id, manifest)
+      this.states.set(manifest.plugin.id, { pluginId: manifest.plugin.id, revision: manifest.revision,
+        name: manifest.plugin.name, version: manifest.plugin.version, status: 'active' })
+    }
+    for (const manifest of options.restoredCatalog?.retired ?? []) {
+      this.retired.set(manifest.plugin.id, [...this.retired.get(manifest.plugin.id) ?? [], manifest])
+    }
+    if (options.restoredCatalog !== undefined) this.mappings()
   }
 
   /** Fixed image dependencies and the frontend's embedded generation.
@@ -155,33 +163,16 @@ export class ForgeInstaller {
   }
 
   private mappings(): void {
-    const scopes = new Map<string, Record<string, string>>()
-    for (const manifest of this.ownedManifests()) {
-      for (const pkg of manifest.packages) {
-        const directory = this.packageDirectory(pkg.id)
-        const dependencies = scopes.get(directory) ?? {}
-        for (const name of pkg.hostDependencies) dependencies[name] = this.options.modules.packageDirectory(name)
-        for (const [name, id] of Object.entries(pkg.dependencies)) dependencies[name] = this.packageDirectory(id)
-        dependencies[pkg.name] = directory
-        scopes.set(directory, dependencies)
-      }
-    }
-    const profileDependencies: Record<string, string> = {}
-    for (const name of Object.keys(this.hostPackages)) profileDependencies[name] = this.options.modules.packageDirectory(name)
-    const subpathDirectories = new Map<string, string>()
-    for (const manifest of this.manifests.values()) {
-      const publicDirectory = join(this.options.profileDirectory, 'node_modules', manifest.plugin.name)
-      const implementation = this.packageDirectory(manifest.plugin.packageId)
-      profileDependencies[manifest.plugin.name] = publicDirectory
-      const dependencies = scopes.get(implementation)
-      if (dependencies === undefined) throw new Error('Forge root package scope is missing')
-      scopes.set(publicDirectory, dependencies)
-      subpathDirectories.set(publicDirectory, implementation)
-    }
-    scopes.set(this.options.profileDirectory, profileDependencies)
-    this.options.modules.setPackageScopes(scopes)
-    this.options.modules.setPackageAliases(new Map([...this.manifests.values()].map(manifest =>
-      [manifest.plugin.name, join(this.options.profileDirectory, 'node_modules', manifest.plugin.name)])), subpathDirectories)
+    applyForgeMappings(this.options.modules, this.options.profileDirectory, this.hostPackages, this.catalog())
+  }
+
+  private catalog(): ForgeCatalog {
+    return forgeCatalog([...this.manifests.values()], [...this.retired.values()].flat())
+  }
+
+  private withFileBatch(operation: () => void): void {
+    if (this.options.withFileBatch === undefined) operation()
+    else this.options.withFileBatch(operation)
   }
 
   private patch(id: string, entry: string | undefined): { path: string; text: string } {
@@ -246,7 +237,10 @@ export class ForgeInstaller {
     const manifest = this.manifests.get(state.pluginId)
     if (manifest === undefined) return state
     const bundle = this.bundleEntry(manifest)
-    const enabled = bundle === undefined || this.bundles(this.profileManifest()).includes(state.name)
+    const patchPath = join(this.options.profileDirectory, 'cordis.patch.yml')
+    const enabled = bundle === undefined
+      ? this.options.vfs.existsSync(patchPath) && hasForgeProfileEntry(this.options.vfs.readFileSync(patchPath, 'utf8') as string, `forge-${state.pluginId}`)
+      : this.bundles(this.profileManifest()).includes(state.name)
     const id = bundle ?? `forge-${state.pluginId}`
     const expectedActive = enabled && !this.options.isEntryDisabled(id, state.name)
     const active = this.options.isEntryActive(id, state.name)
@@ -275,8 +269,7 @@ export class ForgeInstaller {
   }
 
   private record(result: ForgeResult, paths: string[]): void {
-    this.write(join(this.directory, 'installed.json'), JSON.stringify({ protocol: 1, generation: FORGE_GENERATION,
-      plugins: [...this.states.values()], manifests: [...this.manifests.values()] }, null, 2) + '\n', result, paths)
+    this.write(join(this.directory, 'installed.json'), JSON.stringify(this.catalog(), null, 2) + '\n', result, paths)
   }
 
   private collect(previous: readonly ForgePackage[], paths: string[]): void {
@@ -290,6 +283,43 @@ export class ForgeInstaller {
       paths.push(directory)
     }
     this.mappings()
+  }
+
+  private releaseRetired(manifest: ForgeManifest, paths: string[]): void {
+    const root = manifest.packages.find(pkg => pkg.id === manifest.plugin.packageId)
+    if (root === undefined) throw new ForgeError('invalid-manifest', 'Plugin package is missing')
+    const publicDirectory = join(this.options.profileDirectory, 'node_modules', manifest.plugin.name)
+    const currentFiles = new Set(root.files.filter(file => file.path !== root.entry).map(file => file.path))
+    for (const previous of this.retired.get(manifest.plugin.id) ?? []) {
+      const previousRoot = previous.packages.find(pkg => pkg.id === previous.plugin.packageId)
+      for (const file of previousRoot?.files ?? []) {
+        if (file.path === previousRoot?.entry || file.path === 'index.js' || currentFiles.has(file.path)) continue
+        const obsolete = join(publicDirectory, file.path)
+        this.options.vfs.rmSync(obsolete, { force: true })
+        paths.push(obsolete)
+      }
+    }
+    const retired = this.retired.get(manifest.plugin.id) ?? []
+    this.retired.delete(manifest.plugin.id)
+    this.collect(retired.flatMap(item => item.packages), paths)
+  }
+
+  /**
+   * Release obsolete files after a fresh boot has activated or deliberately disabled their current owner.
+   * Failed current plugins keep retained artifacts and report their actual inactive state.
+   */
+  finishRestore(): void {
+    this.withFileBatch(() => {
+      for (const state of this.states.values()) {
+        if (!this.retired.has(state.pluginId) || this.currentState(state).status === 'activation-failed') continue
+        const manifest = this.manifests.get(state.pluginId)
+        if (manifest === undefined) throw new ForgeError('invalid-catalog', 'Installed plugin ownership is missing')
+        const paths: string[] = []
+        this.releaseRetired(manifest, paths)
+        this.record({ protocol: 1, pluginId: state.pluginId, revision: state.revision,
+          status: 'active', downloadedFiles: 0, writtenFiles: 0, observerErrors: [] }, paths)
+      }
+    })
   }
 
   /** Download and verify all missing artifacts before applying one serialized update.
@@ -372,28 +402,33 @@ export class ForgeInstaller {
           bundle === undefined ? old !== undefined && this.bundleEntry(old) !== undefined ? false : undefined : enabled)
         const paths: string[] = []
         this.publish({ pluginId: result.pluginId, revision: result.revision, phase: 'begin', paths: [] }, result)
-        for (const pkg of manifest.packages) {
-          for (const file of pkg.files) {
-            const bytes = prepared.get(file.sha256)
-            if (bytes !== undefined) this.write(join(this.packageDirectory(pkg.id), file.path), bytes, result, paths)
-          }
-          this.write(join(this.packageDirectory(pkg.id), 'package.json'), JSON.stringify({ name: pkg.name, version: pkg.version, main: pkg.entry, ...pkg.metadata }), result, paths)
-        }
-        if (old !== undefined) this.retired.set(manifest.plugin.id, [...this.retired.get(manifest.plugin.id) ?? [], old])
-        this.manifests.set(manifest.plugin.id, manifest)
-        this.mappings()
         const rootPackage = manifest.packages.find(pkg => pkg.id === manifest.plugin.packageId)
         if (rootPackage === undefined) throw new ForgeError('invalid-manifest', 'Plugin package is missing')
-        for (const file of rootPackage.files) {
-          if (file.path === rootPackage.entry || file.path === 'index.js') continue
-          const data = this.options.vfs.readFileSync(join(this.packageDirectory(rootPackage.id), file.path))
-          this.write(join(publicDirectory, file.path), data, result, paths)
-        }
-        this.write(join(publicDirectory, 'package.json'), JSON.stringify({ name: rootPackage.name, version: rootPackage.version,
-          main: 'index.js', ...rootPackage.metadata, exports: publicExports(rootPackage.metadata?.exports) }), result, paths)
-        this.write(profilePackage.path, profilePackage.text, result, paths)
-        this.write(entryPath, `module.exports = require(${JSON.stringify(implementation)});\n`, result, paths)
-        this.write(patch.path, patch.text, result, paths)
+        this.withFileBatch(() => {
+          for (const pkg of manifest.packages) {
+            for (const file of pkg.files) {
+              const bytes = prepared.get(file.sha256)
+              if (bytes !== undefined) this.write(join(this.packageDirectory(pkg.id), file.path), bytes, result, paths)
+            }
+            this.write(join(this.packageDirectory(pkg.id), 'package.json'), JSON.stringify({ name: pkg.name, version: pkg.version, main: pkg.entry, ...pkg.metadata }), result, paths)
+          }
+          if (old !== undefined && JSON.stringify(old) !== JSON.stringify(manifest)) {
+            this.retired.set(manifest.plugin.id, [...this.retired.get(manifest.plugin.id) ?? [], old])
+          }
+          this.manifests.set(manifest.plugin.id, manifest)
+          this.mappings()
+          for (const file of rootPackage.files) {
+            if (file.path === rootPackage.entry || file.path === 'index.js') continue
+            const data = this.options.vfs.readFileSync(join(this.packageDirectory(rootPackage.id), file.path))
+            this.write(join(publicDirectory, file.path), data, result, paths)
+          }
+          this.write(join(publicDirectory, 'package.json'), JSON.stringify({ name: rootPackage.name, version: rootPackage.version,
+            main: 'index.js', ...rootPackage.metadata, exports: forgePublicExports(rootPackage.metadata?.exports) }), result, paths)
+          this.write(profilePackage.path, profilePackage.text, result, paths)
+          this.write(entryPath, `module.exports = require(${JSON.stringify(implementation)});\n`, result, paths)
+          this.write(patch.path, patch.text, result, paths)
+          this.record(result, paths)
+        })
         this.publish({ pluginId: result.pluginId, revision: result.revision, phase: 'files-applied', paths: [...paths] }, result)
         try {
           const activation = await this.options.hmr.reconcileProfile(enabled ? [bundle ?? `forge-${manifest.plugin.id}`] : [])
@@ -413,22 +448,12 @@ export class ForgeInstaller {
           result.message = error instanceof Error ? error.message : String(error)
         }
         this.states.set(manifest.plugin.id, { pluginId: manifest.plugin.id, revision: manifest.revision, name: manifest.plugin.name, version: manifest.plugin.version, status: result.status === 'active' || result.status === 'disabled' ? result.status : 'activation-failed', ...result.message === undefined ? {} : { message: result.message } })
-        if (result.status === 'active' || result.status === 'disabled') {
-          const currentFiles = new Set(rootPackage.files.filter(file => file.path !== rootPackage.entry).map(file => file.path))
-          for (const previous of this.retired.get(manifest.plugin.id) ?? []) {
-            const previousRoot = previous.packages.find(pkg => pkg.id === previous.plugin.packageId)
-            for (const file of previousRoot?.files ?? []) {
-              if (file.path === previousRoot?.entry || file.path === 'index.js' || currentFiles.has(file.path)) continue
-              const obsolete = join(publicDirectory, file.path)
-              this.options.vfs.rmSync(obsolete, { force: true })
-              paths.push(obsolete)
-            }
+        this.withFileBatch(() => {
+          if (result.status === 'active' || result.status === 'disabled') {
+            this.releaseRetired(manifest, paths)
           }
-          const retired = this.retired.get(manifest.plugin.id) ?? []
-          this.retired.delete(manifest.plugin.id)
-          this.collect(retired.flatMap(item => item.packages), paths)
-        }
-        this.record(result, paths)
+          this.record(result, paths)
+        })
         this.publish({ pluginId: result.pluginId, revision: result.revision, phase: 'activation', status: result.status, paths: [...paths] }, result)
         return result
       })
@@ -452,11 +477,14 @@ export class ForgeInstaller {
       const paths: string[] = []
       const result: ForgeResult = { protocol: 1, pluginId: id, revision: manifest.revision, status: 'removed', downloadedFiles: 0, writtenFiles: 0, observerErrors: [] }
       this.publish({ pluginId: id, revision: manifest.revision, phase: 'begin', paths: [] }, result)
-      this.write(patch.path, patch.text, result, paths)
-      if (this.bundleEntry(manifest) !== undefined) {
-        const deselected = this.profileDependency(manifest.plugin.name, manifest.plugin.version, false)
-        this.write(deselected.path, deselected.text, result, paths)
-      }
+      this.withFileBatch(() => {
+        this.write(patch.path, patch.text, result, paths)
+        if (this.bundleEntry(manifest) !== undefined) {
+          const deselected = this.profileDependency(manifest.plugin.name, manifest.plugin.version, false)
+          this.write(deselected.path, deselected.text, result, paths)
+        }
+        this.record(result, paths)
+      })
       this.publish({ pluginId: id, revision: manifest.revision, phase: 'files-applied', paths: [...paths] }, result)
       try {
         const activation = await this.options.hmr.reconcileProfile()
@@ -469,22 +497,24 @@ export class ForgeInstaller {
         result.status = 'activation-failed'
         result.message = error instanceof Error ? error.message : String(error)
       }
-      if (result.status === 'removed') {
-        this.manifests.delete(id)
-        this.states.delete(id)
-        const publicDirectory = join(this.options.profileDirectory, 'node_modules', manifest.plugin.name)
-        const entryPath = join(publicDirectory, 'index.js')
-        this.options.modules.hmrModules.invalidate([pathToFileUrl(entryPath)])
-        this.options.vfs.rmSync(publicDirectory, { recursive: true, force: true })
-        paths.push(publicDirectory)
-        this.write(profilePackage.path, profilePackage.text, result, paths)
-        const retired = this.retired.get(id) ?? []
-        this.retired.delete(id)
-        this.collect([...manifest.packages, ...retired.flatMap(item => item.packages)], paths)
-      } else {
-        this.states.set(id, { pluginId: id, revision: manifest.revision, name: manifest.plugin.name, version: manifest.plugin.version, status: 'activation-failed', ...result.message === undefined ? {} : { message: result.message } })
-      }
-      this.record(result, paths)
+      this.withFileBatch(() => {
+        if (result.status === 'removed') {
+          this.manifests.delete(id)
+          this.states.delete(id)
+          const publicDirectory = join(this.options.profileDirectory, 'node_modules', manifest.plugin.name)
+          const entryPath = join(publicDirectory, 'index.js')
+          this.options.modules.hmrModules.invalidate([pathToFileUrl(entryPath)])
+          this.options.vfs.rmSync(publicDirectory, { recursive: true, force: true })
+          paths.push(publicDirectory)
+          this.write(profilePackage.path, profilePackage.text, result, paths)
+          const retired = this.retired.get(id) ?? []
+          this.retired.delete(id)
+          this.collect([...manifest.packages, ...retired.flatMap(item => item.packages)], paths)
+        } else {
+          this.states.set(id, { pluginId: id, revision: manifest.revision, name: manifest.plugin.name, version: manifest.plugin.version, status: 'activation-failed', ...result.message === undefined ? {} : { message: result.message } })
+        }
+        this.record(result, paths)
+      })
       this.publish({ pluginId: id, revision: manifest.revision, phase: 'activation', status: result.status, paths: [...paths] }, result)
       return result
     }))

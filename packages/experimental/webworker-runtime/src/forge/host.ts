@@ -4,7 +4,7 @@ import type { MemoryVfs } from '../storage/memory.ts'
 import type { WorkerModuleLoader } from '../module-system/module-loader.ts'
 import type Hmr from '@deepseek-ai/dsh-hmr'
 import { basename, join } from '../module-system/posix-path.ts'
-import { ForgeInstaller } from './installer.ts'
+import { ForgeInstaller, type ForgeInstallerOptions } from './installer.ts'
 import { editForgeProfilePatch } from './profile-patch.ts'
 import { ForgeError, object } from './protocol.ts'
 import { ForgeCommands } from './commands.ts'
@@ -42,6 +42,7 @@ export function readForgeHostPackages(vfs: MemoryVfs, root: string): Readonly<Re
  * @param fetcher Host-owned outbound HTTP.
  * @param clientPackages Trusted page-shared versions; omission declares none.
  * @param staticSpecifiers Static module names supplied by this Worker, protected against private remapping.
+ * @param restoration Validated catalog and synchronous persistence batch supplied by the host.
  * @returns Installer and its Fetch route adapter.
  */
 export function createForgeHost(vfs: MemoryVfs, modules: WorkerModuleLoader, profileDirectory: string,
@@ -51,10 +52,12 @@ export function createForgeHost(vfs: MemoryVfs, modules: WorkerModuleLoader, pro
   fetcher: HttpFetch = (input, init) => fetch(input, init),
   clientPackages: Readonly<Record<string, string>> = {},
   staticSpecifiers: readonly string[] = [],
+  restoration: Pick<ForgeInstallerOptions, 'restoredCatalog' | 'withFileBatch'> = {},
 ): { installer: ForgeInstaller; commands: ForgeCommands; fetch: (request: Request) => Promise<Response> } {
   const installer = new ForgeInstaller({ vfs, modules, profileDirectory, hostPackages, clientPackages, staticSpecifiers,
-    hmr, isEntryActive, isEntryDisabled,
+    ...restoration, hmr, isEntryActive, isEntryDisabled,
     fetch: fetcher, editPatch: editForgeProfilePatch })
+  installer.finishRestore()
   const commands = new ForgeCommands(installer, basename(profileDirectory), fetcher)
   return {
     installer, commands,

@@ -186,3 +186,18 @@ it('compares shared package names independently of serialization order', async (
   await vi.waitFor(() => { expect(outcome()).toContain('Active') })
   expect(runtime.mock.calls.some(([path]) => String(path).endsWith('/install'))).toBe(true)
 })
+
+it('places the launcher in the storage toolbar and describes persistence without promising pending writes', async () => {
+  const toolbar = document.createElement('div')
+  document.body.append(toolbar)
+  const runtime = vi.fn(async () => response({ ...target, plugins: [] }))
+  dispose = mountForgePreview('http://localhost:36936', runtime, undefined, { launcherParent: toolbar, persistentStorage: true })
+  expect(toolbar.querySelector('button')?.textContent).toBe('DSH Forge')
+  open()
+  await vi.waitFor(() => { expect(outcome()).toBe('Ready') })
+  expect(document.querySelector('dialog')?.textContent).toContain('Check the storage status before closing this page.')
+  expect(document.querySelector('dialog')?.textContent).not.toContain('Reloading this page discards them.')
+  dispose()
+  expect(toolbar.childElementCount).toBe(0)
+  toolbar.remove()
+})

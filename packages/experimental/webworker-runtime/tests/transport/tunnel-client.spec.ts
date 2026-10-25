@@ -365,3 +365,20 @@ async function settled(condition: () => boolean): Promise<void> {
   }
   if (!condition()) throw new Error('fixture condition did not settle')
 }
+
+
+// Storage events carry commit state independently of request completion.
+{
+  const { worker, sent, deliver } = stubWorker()
+  const tunnel = new WorkerTunnel(worker)
+  const storage = { kind: 'indexeddb', source: 'source', deployment: 'deployment' } as const
+  tunnel.init('https://preview.test/base.tar.gz', [], undefined, storage)
+  check('init carries browser persistence identity', sent[0], { t: 'init', image: 'https://preview.test/base.tar.gz', overlays: [], storage })
+  deliver({ t: 'storage-status', status: { kind: 'pending', revision: 0, pending: 1 } })
+  const observed: string[] = []
+  const release = tunnel.subscribeStorageStatus((status) => { observed.push(status.kind) })
+  deliver({ t: 'storage-status', status: { kind: 'saved', revision: 1, pending: 0 } })
+  release()
+  deliver({ t: 'storage-status', status: { kind: 'pending', revision: 1, pending: 1 } })
+  check('storage observers replay current state and detach without saving', observed, ['pending', 'saved'])
+}

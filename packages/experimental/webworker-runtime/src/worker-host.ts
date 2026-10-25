@@ -43,6 +43,8 @@ import {
 import { parseImageManifest, type ImageManifest } from './image-manifest.ts'
 import { isForgeEntryActive, isForgeEntryDisabled } from './forge/activation.ts'
 import { createForgeHost, readForgeHostPackages } from './forge/host.ts'
+import { readForgeCatalog, applyForgeMappings } from './forge/catalog.ts'
+import type { VfsPersistenceController } from './storage/persistence.ts'
 import type { ForgeInstaller } from './forge/installer.ts'
 import { VirtualExecutableRegistry } from './shell/process/virtual-executables.ts'
 import { createChildProcessFacade } from './node/builtin_modules/implemented/child_process.ts'
@@ -86,6 +88,8 @@ export interface HostContext {
 
 /** Construction inputs for {@link createWorkerHost}. */
 export interface WorkerHostOptions {
+  /** Mutable-root storage restored before profile composition; the host flushes it after tree disposal. */
+  readonly persistence?: VfsPersistenceController
   /** Outbound HTTP provider; defaults to platform Fetch. Must honor Request.signal through body consumption. */
   readonly httpTransport?: HttpTransport
   /**
@@ -183,6 +187,7 @@ async function readImage(image: Uint8Array | string, fetcher: HttpFetch): Promis
  */
 export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
   const http = new WorkerHttpTransport(options.httpTransport)
+  const persistence = options.persistence
   const root = options.root ?? DEFAULT_ROOT
   const port = options.port ?? DEFAULT_PORT
   const tunnel = new TunnelServer({
@@ -209,7 +214,7 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
         readImage(options.image, http.request),
         Promise.all((options.overlays ?? []).map(image => readImage(image, http.request))),
       ])
-      const mounted = loadVfsImage(bytes, root)
+      const mounted = loadVfsImage(bytes, root, new MemoryVfs(persistence === undefined ? {} : { sink: persistence }))
       const hostPackages = readForgeHostPackages(mounted, root)
       const manifestPath = options.manifestPath ?? join(root, IMAGE_MANIFEST_PATH)
       const clientPackages = Object.freeze({ ...readImageManifest(mounted, manifestPath).clientPackages })
@@ -219,6 +224,7 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       for (const directory of IMAGE_EMPTY_DIRECTORIES) {
         mounted.seedDirectory(join(root, directory.replace(/\/$/, '')))
       }
+      await persistence?.hydrate(mounted)
       setActiveVfs(mounted)
       vfs = mounted
 
@@ -248,6 +254,10 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       setActiveModuleLoader(loader)
       modules = loader
 
+      const staticSpecifiers = [...Object.keys(staticModules), ...Object.keys(options.staticModulePrefixes ?? {})]
+      const profileDirectory = join(root, IMAGE_HOME_DIRECTORY, 'profiles', manifest.profile)
+      const restoredCatalog = readForgeCatalog(mounted, profileDirectory, hostPackages, clientPackages, staticSpecifiers)
+      applyForgeMappings(loader, profileDirectory, hostPackages, restoredCatalog)
       const require = loader.requireFrom(root)
       const appBoot = require('@deepseek-ai/dsh-app-boot') as AppBootFace
       const { DSH_LAUNCH_ENVIRONMENT_KEY } = require('@deepseek-ai/dsh-launch-environment') as {
@@ -307,16 +317,32 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
         forge = createForgeHost(mounted, loader, profile.dir, hostPackages, hmr,
           (id, name) => isForgeEntryActive(nativeLoader, id, name),
           (id, name) => isForgeEntryDisabled(nativeLoader, id, name), http.request, clientPackages,
-          [...Object.keys(staticModules), ...Object.keys(options.staticModulePrefixes ?? {})])
+          staticSpecifiers, { restoredCatalog, ...persistence === undefined ? {} : {
+            withFileBatch: (operation) => { persistence.batch(operation) },
+          } })
       }
       if (forge !== undefined) {
         unregisterExecutables.push(executables.register(forge.commands.dsh), executables.register(forge.commands.which))
       }
       const forgeFetch = forge?.fetch
+      const localRoutes = new Map<string, (request: Request) => Promise<Response>>()
+      if (forgeFetch !== undefined) {
+        for (const path of ['/__forge/target', '/__forge/installed', '/__forge/install', '/__forge/remove', '/__forge/configure']) {
+          localRoutes.set(path, forgeFetch)
+        }
+      }
+      const storageFetch = async (request: Request): Promise<Response> => {
+        const path = new URL(request.url).pathname
+        if (!((path === '/__storage/status' && request.method === 'GET') || (path === '/__storage/flush' && request.method === 'POST'))) {
+          return Response.json({ error: { code: 'method-not-allowed', message: 'Unsupported storage operation' } }, { status: 405 })
+        }
+        if (path === '/__storage/flush') await persistence?.flush()
+        return Response.json(persistence?.status() ?? { kind: 'disabled' })
+      }
+      localRoutes.set('/__storage/status', storageFetch)
+      localRoutes.set('/__storage/flush', storageFetch)
       tunnel.serve({
-        ...forgeFetch === undefined ? {} : { localRoutes: new Map(
-          ['/__forge/target', '/__forge/installed', '/__forge/install', '/__forge/remove', '/__forge/configure'].map(path => [path, forgeFetch]),
-        ) },
+        localRoutes,
         directFetch: (request: Request) => handler.fetch(request, peer),
         bootPayload: () => readBootPayload(ctx),
         openStream: (endpoint, payload, uplink, signal) =>
@@ -327,6 +353,8 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
     } catch (reason) {
       http.close()
       tunnel.fail(reason)
+      try { await persistence?.dispose() }
+      catch (error) { console.error('webworker host: storage disposal after boot failure failed', error) }
       throw reason
     }
   }
@@ -337,10 +365,14 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
     stop: async (): Promise<void> => {
       http.close()
       tunnel.fail(new Error('webworker host: the tree was disposed'))
-      await forge?.commands.close()
-      await forge?.installer.close()
-      await context?.fiber.dispose()
-      for (const unregister of unregisterExecutables) unregister()
+      try {
+        await forge?.commands.close()
+        await forge?.installer.close()
+        await context?.fiber.dispose()
+      } finally {
+        for (const unregister of unregisterExecutables) unregister()
+        await persistence?.dispose()
+      }
     },
     get vfs(): MemoryVfs | undefined {
       return vfs
