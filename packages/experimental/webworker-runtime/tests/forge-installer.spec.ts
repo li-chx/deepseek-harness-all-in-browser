@@ -106,11 +106,11 @@ it('resolves two versions by importer and retains a dependency used by another i
 it('rejects the preceding frontend generation before downloading or writing', async () => {
   const f = fixture()
   const { manifest } = plan()
-  manifest.generation = 'dsh-worker-rc2-5'
+  manifest.generation = 'dsh-worker-rc2-6'
   for (const pkg of manifest.packages) {
-    for (const file of pkg.files) file.objectKey = `dsh-worker-rc2-5/objects/${file.sha256}`
+    for (const file of pkg.files) file.objectKey = `dsh-worker-rc2-6/objects/${file.sha256}`
   }
-  expect(f.installer.target().generation).toBe('dsh-worker-rc2-6')
+  expect(f.installer.target().generation).toBe('dsh-worker-rc2-7')
   await expect(f.installer.install(manifest, 'http://forge.local')).rejects.toMatchObject({ code: 'generation-mismatch' })
   expect(f.calls).toEqual([])
   expect(f.writes).toEqual([])
@@ -593,4 +593,116 @@ it('rejects native disablement that leaves an active entry running', async () =>
   expect(await f.installer.install(first.manifest, 'http://forge.local')).toMatchObject({
     status: 'activation-failed', message: 'The disabled plugin is still active',
   })
+})
+
+function privateHostPlan(id: string, version: number): ReturnType<typeof plan> {
+  const source = lowerModuleSource({ filename: 'index.js', source: `
+    import lib from 'host-lib';
+    export const esm = lib;
+    export const cjs = require('host-lib');
+    export const host = require('host-consumer').shared;
+    export const read = () => require('host-lib').version;
+    // ${id}:${version}
+  ` }).code
+  const result = plan(id, source, `exports.version = ${version}; exports.self = () => require('host-lib')`)
+  const root = result.manifest.packages[0]!
+  const dependency = result.manifest.packages[1]!
+  dependency.name = 'host-lib'
+  dependency.version = `${version}.0.0`
+  root.dependencies = { 'host-lib': dependency.id }
+  const consumer = 'exports.shared = require("host-lib").shared'
+  const consumerId = hash(consumer)
+  result.files.set(consumerId, consumer)
+  root.dependencies['host-consumer'] = consumerId
+  result.manifest.packages.push({ id: consumerId, name: 'host-consumer', version: '1.0.0', entry: 'index.js', dependencies: {},
+    files: [{ path: 'index.js', sha256: consumerId, size: Buffer.byteLength(consumer), objectKey: `${FORGE_GENERATION}/objects/${consumerId}` }] })
+  result.manifest.hostPackages = { 'host-lib': '1.0.0' }
+  return result
+}
+
+interface PrivateHostExports {
+  esm: { version: number; self(): unknown }
+  cjs: unknown
+  host: unknown
+  read(): number
+}
+function privateHostExports(f: ReturnType<typeof fixture>, manifest: ForgeManifest): PrivateHostExports {
+  return f.modules.requireFrom(`/dsh/home/profiles/web/plugins/.forge/packages/${manifest.plugin.packageId}`)('./index.js') as PrivateHostExports
+}
+
+it('keeps host, two private versions, CJS/ESM identities and self references separate through update and removal', async () => {
+  const f = fixture()
+  const batches: string[] = []
+  f.installer.subscribe((event) => { batches.push(...event.paths) })
+  const hostPath = '/dsh/node_modules/host-lib/index.js'
+  const hostBytes = f.vfs.readFileSync(hostPath, 'utf8')
+  const host = f.modules.requireFrom('/dsh')('host-lib') as { shared: unknown }
+  const first = privateHostPlan('one', 2)
+  const other = privateHostPlan('two', 3)
+  for (const entry of [first, other]) {
+    for (const pair of entry.files) f.artifacts.set(...pair)
+    expect(await f.installer.install(entry.manifest, 'http://forge.local')).toMatchObject({ status: 'active' })
+  }
+  const one = privateHostExports(f, first.manifest)
+  const two = privateHostExports(f, other.manifest)
+  expect(one.esm).toBe(one.cjs)
+  expect(two.esm).toBe(two.cjs)
+  expect(one.esm).not.toBe(two.esm)
+  expect(one.esm.self()).toBe(one.esm)
+  expect(two.esm.self()).toBe(two.esm)
+  expect([one.read(), two.read()]).toEqual([2, 3])
+  expect(one.host).toBe(host.shared)
+  expect(two.host).toBe(host.shared)
+  const next = privateHostPlan('one', 4)
+  for (const pair of next.files) f.artifacts.set(...pair)
+  await f.installer.install(next.manifest, 'http://forge.local')
+  expect(privateHostExports(f, next.manifest).read()).toBe(4)
+  expect(two.read()).toBe(3)
+  expect(await f.installer.remove('one')).toMatchObject({ status: 'removed' })
+  expect(two.read()).toBe(3)
+  expect(f.modules.requireFrom('/dsh')('host-lib')).toBe(host)
+  expect(f.vfs.readFileSync(hostPath, 'utf8')).toEqual(hostBytes)
+  expect(f.writes.some(path => path.startsWith('/dsh/node_modules/'))).toBe(false)
+  const collected = `/dsh/home/profiles/web/plugins/.forge/packages/${next.manifest.packages[1]!.id}/index.js`
+  expect(f.vfs.existsSync(collected)).toBe(false)
+  expect(f.writes).toContain(collected)
+  expect(batches).toContain(collected)
+})
+
+it('retains the old private version for deferred requires when an update fails activation', async () => {
+  const f = fixture()
+  const first = privateHostPlan('one', 2)
+  const next = privateHostPlan('one', 3)
+  for (const entry of [first, next]) for (const pair of entry.files) f.artifacts.set(...pair)
+  await f.installer.install(first.manifest, 'http://forge.local')
+  const old = privateHostExports(f, first.manifest)
+  f.fail()
+  expect(await f.installer.install(next.manifest, 'http://forge.local')).toMatchObject({ status: 'activation-failed' })
+  expect(old.read()).toBe(2)
+  expect(old.esm.self()).toBe(old.esm)
+  expect(privateHostExports(f, next.manifest).read()).toBe(3)
+  expect(f.vfs.existsSync(`/dsh/home/profiles/web/plugins/.forge/packages/${first.manifest.packages[1]!.id}/index.js`)).toBe(true)
+})
+
+it.each(['@deepseek-ai/dsh-core', '@deepseek-ai/cordis', 'react', 'fs', 'process', 'got', '@deepseek-ai/node-addon-system'])(
+  'refuses private copies of shared %s before download or writes', async (name) => {
+    const f = fixture({ react: '19.0.0' })
+    const { manifest } = plan()
+    manifest.packages[1]!.name = name
+    manifest.packages[0]!.dependencies = { [name]: manifest.packages[1]!.id }
+    await expect(f.installer.install({ ...manifest, sharedPackages: [] }, 'http://forge.local')).rejects.toMatchObject({ code: 'core-package' })
+    expect(f.calls).toEqual([])
+    expect(f.writes).toEqual([])
+  },
+)
+
+it('refuses an ordinary host library as the root plugin without changing global package aliases', async () => {
+  const f = fixture()
+  const { manifest } = plan()
+  manifest.plugin.name = 'host-lib'
+  manifest.packages[0]!.name = 'host-lib'
+  await expect(f.installer.install(manifest, 'http://forge.local')).rejects.toMatchObject({ code: 'core-package' })
+  expect(f.calls).toEqual([])
+  expect(f.writes).toEqual([])
+  expect(f.modules.requireFrom('/dsh')('host-lib')).toEqual({ shared: {} })
 })

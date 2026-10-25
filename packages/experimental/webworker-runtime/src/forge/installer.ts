@@ -1,4 +1,5 @@
 /** Applies complete plugin plans through VFS mutations and Cordis reconciliation. */
+import { forgeSharedPackages } from './package-policy.ts'
 import { forgeBundleEntry, hasForgeProfileEntry } from './profile-patch.ts'
 import { sha256 } from '@noble/hashes/sha2.js'
 import type Hmr from '@deepseek-ai/dsh-hmr'
@@ -46,6 +47,8 @@ export interface ForgeInstallerOptions {
   hostPackages: Readonly<Record<string, string>>
   /** Trusted page-shared versions; omission declares none. They never enter Host resolver scopes. */
   clientPackages?: Readonly<Record<string, string>>
+  /** Additional trusted static specifiers owned by this Worker; never supplied by an install manifest. */
+  staticSpecifiers?: readonly string[]
   hmr: Pick<Hmr, 'runExclusive' | 'reconcileProfile'>
   fetch: typeof fetch
   /** Inspect the live Loader entry rather than the last installer result. */
@@ -71,12 +74,14 @@ export class ForgeInstaller {
   private closing = false
   private readonly directory: string
   private readonly clientPackages: Readonly<Record<string, string>>
+  private readonly sharedPackages: readonly string[]
   private readonly hostPackages: Readonly<Record<string, string>>
 
   constructor(private readonly options: ForgeInstallerOptions) {
     this.directory = join(options.profileDirectory, 'plugins/.forge')
     this.clientPackages = Object.freeze({ ...options.clientPackages })
     this.hostPackages = Object.freeze({ ...options.hostPackages })
+    this.sharedPackages = Object.freeze(forgeSharedPackages(this.hostPackages, this.clientPackages, options.staticSpecifiers))
   }
 
   /** Fixed image dependencies and the frontend's embedded generation.
@@ -87,8 +92,10 @@ export class ForgeInstaller {
     generation: string
     hostPackages: Readonly<Record<string, string>>
     clientPackages: Readonly<Record<string, string>>
+    sharedPackages: readonly string[]
   } {
-    return { protocol: 1, generation: FORGE_GENERATION, hostPackages: this.hostPackages, clientPackages: this.clientPackages }
+    return { protocol: 1, generation: FORGE_GENERATION, hostPackages: this.hostPackages,
+      clientPackages: this.clientPackages, sharedPackages: this.sharedPackages }
   }
 
   /** Read activation state and the latest batch per plugin.
@@ -147,11 +154,11 @@ export class ForgeInstaller {
       for (const pkg of manifest.packages) {
         const directory = this.packageDirectory(pkg.id)
         const dependencies = scopes.get(directory) ?? {}
-        dependencies[pkg.name] = directory
-        for (const [name, id] of Object.entries(pkg.dependencies)) dependencies[name] = this.packageDirectory(id)
         // Plan-wide host requirements may differ among owners of the same package.
-        // Their union always resolves to the fixed image instance.
+        // Private dependency edges and self references take precedence over that fallback.
         for (const name of Object.keys(manifest.hostPackages)) dependencies[name] = this.options.modules.packageDirectory(name)
+        for (const [name, id] of Object.entries(pkg.dependencies)) dependencies[name] = this.packageDirectory(id)
+        dependencies[pkg.name] = directory
         scopes.set(directory, dependencies)
       }
     }
@@ -281,7 +288,7 @@ export class ForgeInstaller {
   install(value: unknown, baseUrl: string, signal?: AbortSignal): Promise<ForgeResult> {
     return this.serial(async () => {
       signal?.throwIfAborted()
-      const manifest = parseForgeManifest(value, this.hostPackages, this.clientPackages)
+      const manifest = parseForgeManifest(value, this.hostPackages, this.clientPackages, this.sharedPackages)
       const duplicate = [...this.manifests.values()].find(item =>
         item.plugin.name === manifest.plugin.name && item.plugin.id !== manifest.plugin.id)
       if (duplicate !== undefined) throw new ForgeError('name-conflict', 'A plugin with this package name is already installed')
@@ -336,7 +343,7 @@ export class ForgeInstaller {
       return this.options.hmr.runExclusive(async () => {
         signal?.throwIfAborted()
         // Revalidate at the mutation entry; no caller can install outside its fixed target.
-        parseForgeManifest(manifest, this.hostPackages, this.clientPackages)
+        parseForgeManifest(manifest, this.hostPackages, this.clientPackages, this.sharedPackages)
         this.assertPackageOwnership(manifest)
         const publicDirectory = join(this.options.profileDirectory, 'node_modules', manifest.plugin.name)
         const entryPath = join(publicDirectory, 'index.js')

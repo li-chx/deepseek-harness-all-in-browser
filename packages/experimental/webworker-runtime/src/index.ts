@@ -58,3 +58,4 @@ export { FORGE_GENERATION, ForgeError, parseForgeManifest, type ForgeManifest, t
 export { readForgeHostPackages } from './forge/host.ts'
 export { WorkerHttpTransport, type HttpTransport, type HttpFetch } from './transport/http-transport.ts'
 export { PortHttpTransport, serveHttpTransport } from './transport/http-port.ts'
+export { forgeSharedPackages } from './forge/package-policy.ts'

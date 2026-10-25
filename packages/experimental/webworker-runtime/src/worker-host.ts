@@ -306,7 +306,8 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
         if (nativeLoader === undefined) throw new Error('webworker host: HMR requires the Loader service')
         forge = createForgeHost(mounted, loader, profile.dir, hostPackages, hmr,
           (id, name) => isForgeEntryActive(nativeLoader, id, name),
-          (id, name) => isForgeEntryDisabled(nativeLoader, id, name), http.request, clientPackages)
+          (id, name) => isForgeEntryDisabled(nativeLoader, id, name), http.request, clientPackages,
+          [...Object.keys(staticModules), ...Object.keys(options.staticModulePrefixes ?? {})])
       }
       if (forge !== undefined) {
         unregisterExecutables.push(executables.register(forge.commands.dsh), executables.register(forge.commands.which))

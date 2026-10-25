@@ -41,6 +41,7 @@ export function readForgeHostPackages(vfs: MemoryVfs, root: string): Readonly<Re
  * @param isEntryDisabled Reads native effective entry disablement, independently of fiber activation.
  * @param fetcher Host-owned outbound HTTP.
  * @param clientPackages Trusted page-shared versions; omission declares none.
+ * @param staticSpecifiers Static module names supplied by this Worker, protected against private remapping.
  * @returns Installer and its Fetch route adapter.
  */
 export function createForgeHost(vfs: MemoryVfs, modules: WorkerModuleLoader, profileDirectory: string,
@@ -49,8 +50,10 @@ export function createForgeHost(vfs: MemoryVfs, modules: WorkerModuleLoader, pro
   isEntryDisabled: (id: string, name: string) => boolean,
   fetcher: HttpFetch = (input, init) => fetch(input, init),
   clientPackages: Readonly<Record<string, string>> = {},
+  staticSpecifiers: readonly string[] = [],
 ): { installer: ForgeInstaller; commands: ForgeCommands; fetch: (request: Request) => Promise<Response> } {
-  const installer = new ForgeInstaller({ vfs, modules, profileDirectory, hostPackages, clientPackages, hmr, isEntryActive, isEntryDisabled,
+  const installer = new ForgeInstaller({ vfs, modules, profileDirectory, hostPackages, clientPackages, staticSpecifiers,
+    hmr, isEntryActive, isEntryDisabled,
     fetch: fetcher, editPatch: editForgeProfilePatch })
   const commands = new ForgeCommands(installer, basename(profileDirectory), fetcher)
   return {

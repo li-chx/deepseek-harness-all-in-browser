@@ -1,5 +1,8 @@
 /** Wire validation for plugin artifacts targeting this Worker build. */
-export const FORGE_GENERATION = 'dsh-worker-rc2-6'
+import { forgeSharedPackages, isForgeCorePackage } from './package-policy.ts'
+
+/** Build generation required by every Forge artifact installed in this Worker. */
+export const FORGE_GENERATION = 'dsh-worker-rc2-7'
 
 /** Immutable file served by Forge. */
 export interface ForgeFile {
@@ -90,10 +93,12 @@ function mapping(value: unknown): Record<string, string> {
  * @param value Decoded service response.
  * @param hostPackages Exact versions supplied by the base image.
  * @param clientPackages Exact page-shared versions supplied by the base image; absent means none.
+ * @param sharedPackages Additional trusted shared names; cannot remove built-in package protections.
  * @returns Validated install plan.
  */
 export function parseForgeManifest(value: unknown, hostPackages: Readonly<Record<string, string>>,
-  clientPackages: Readonly<Record<string, string>> = {}): ForgeManifest {
+  clientPackages: Readonly<Record<string, string>> = {}, sharedPackages: readonly string[] = []): ForgeManifest {
+  const shared = new Set([...forgeSharedPackages(hostPackages, clientPackages), ...sharedPackages])
   const raw = object(value)
   if (raw.protocol !== 1 || raw.generation !== FORGE_GENERATION) throw new ForgeError('generation-mismatch', 'Rebuild the plugin for this frontend generation')
   const plugin = object(raw.plugin)
@@ -110,7 +115,7 @@ export function parseForgeManifest(value: unknown, hostPackages: Readonly<Record
     const pkg = object(value)
     const name = text(pkg.name)
     if (!/^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i.test(name)) throw new ForgeError('invalid-manifest', 'Invalid package name')
-    if (Object.hasOwn(hostPackages, name) || Object.hasOwn(clientPackages, name) || name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-') || name.startsWith('@deepseek-ai/cordis')) {
+    if (shared.has(name) || isForgeCorePackage(name)) {
       throw new ForgeError('core-package', `The frontend owns ${name}; plugins cannot replace it`)
     }
     if (!Array.isArray(pkg.files)) throw new ForgeError('invalid-manifest', 'Package files are missing')
@@ -140,7 +145,7 @@ export function parseForgeManifest(value: unknown, hostPackages: Readonly<Record
   if (byId.size !== packages.length) throw new ForgeError('invalid-manifest', 'Duplicate package id')
   for (const pkg of packages) {
     for (const [name, id] of Object.entries(pkg.dependencies)) {
-      if (Object.hasOwn(hostPackages, name) || Object.hasOwn(clientPackages, name)) {
+      if (shared.has(name) || isForgeCorePackage(name)) {
         throw new ForgeError('core-package', `Shared dependency ${name} cannot be remapped`)
       }
       if (byId.get(id)?.name !== name) throw new ForgeError('invalid-manifest', `Missing dependency ${name}`)
@@ -148,6 +153,10 @@ export function parseForgeManifest(value: unknown, hostPackages: Readonly<Record
     for (const left of pkg.files) {
       if (pkg.files.some(right => right.path.startsWith(`${left.path}/`))) throw new ForgeError('invalid-path', 'A package file cannot also be a directory')
     }
+  }
+  const pluginName = text(plugin.name)
+  if (Object.hasOwn(hostPackages, pluginName) || Object.hasOwn(clientPackages, pluginName)) {
+    throw new ForgeError('core-package', `Plugin name ${pluginName} conflicts with a frontend package`)
   }
   const packageId = pluginId(plugin.packageId)
   const entry = path(plugin.entry)

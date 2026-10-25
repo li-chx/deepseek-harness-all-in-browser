@@ -6,7 +6,7 @@ import { mountForgePreview } from '../src/forge-preview.ts'
 const response = (value: object, status = 200): Response => new Response(JSON.stringify(value), {
   status, headers: { 'content-type': 'application/json' },
 })
-const target = { protocol: 1, generation: 'dsh-worker-rc2-6', hostPackages: {} }
+const target = { protocol: 1, generation: 'dsh-worker-rc2-7', hostPackages: {}, sharedPackages: [] }
 const dialogMethods = ['showModal', 'close'] as const
 const originalDialogMethods = dialogMethods.map(key => Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key))
 let dispose: (() => void) | undefined
@@ -155,4 +155,34 @@ it.each([
   click(action)
   await vi.waitFor(() => { expect(outcome()).toContain(status) })
   expect(document.querySelector('ul')?.textContent).toContain(status)
+})
+
+it.each([undefined, null, 'core', ['different'], ['core', 1], ['core', 'core'], ['']])('refuses invalid or different shared package names: %j', async (sharedPackages) => {
+  const runtime = vi.fn(async (path: URL | string) => response(String(path).endsWith('/target')
+    ? { ...target, sharedPackages: ['core'] } : { ...target, plugins: [] }))
+  const network = vi.fn(async () => response({ ...target, sharedPackages }))
+  vi.stubGlobal('fetch', network)
+  dispose = mountForgePreview('http://localhost:36936', runtime)
+  open()
+  await vi.waitFor(() => { expect(outcome()).toBe('Ready') })
+  click('Install npm package')
+  await vi.waitFor(() => { expect(outcome()).toContain('different shared package versions') })
+  expect(network).toHaveBeenCalledTimes(1)
+  expect(runtime.mock.calls.some(([path]) => String(path).endsWith('/install'))).toBe(false)
+})
+
+it('compares shared package names independently of serialization order', async () => {
+  const runtime = vi.fn(async (path: URL | string) => {
+    if (String(path).endsWith('/target')) return response({ ...target, sharedPackages: ['core', 'react'] })
+    if (String(path).endsWith('/install')) return response({ protocol: 1, pluginId: 'forge-test', revision: 'ordered',
+      status: 'active', downloadedFiles: 1, writtenFiles: 1, observerErrors: [] })
+    return response({ ...target, plugins: [] })
+  })
+  vi.stubGlobal('fetch', vi.fn(async () => response({ ...target, sharedPackages: ['react', 'core'] })))
+  dispose = mountForgePreview('http://localhost:36936', runtime)
+  open()
+  await vi.waitFor(() => { expect(outcome()).toBe('Ready') })
+  click('Install npm package')
+  await vi.waitFor(() => { expect(outcome()).toContain('Active') })
+  expect(runtime.mock.calls.some(([path]) => String(path).endsWith('/install'))).toBe(true)
 })

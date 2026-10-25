@@ -260,6 +260,15 @@ export function mountForgePreview(serverUrl: string, hostFetch: TunnelFetch, htt
         throw new Error(copy.packageTarget)
       }
     }
+    const expectedShared = hostTarget.sharedPackages
+    const actualShared = serviceTarget.sharedPackages
+    if (!Array.isArray(expectedShared) || !Array.isArray(actualShared)
+      || expectedShared.some(name => typeof name !== 'string' || !name)
+      || actualShared.some(name => typeof name !== 'string' || !name)
+      || new Set(expectedShared).size !== expectedShared.length || new Set(actualShared).size !== actualShared.length
+      || expectedShared.length !== actualShared.length || expectedShared.some(name => !actualShared.includes(name))) {
+      throw new Error(copy.packageTarget)
+    }
     return hostTarget
   }
 
