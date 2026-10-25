@@ -1309,10 +1309,35 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async reconcileProfile(requiredIds: readonly string[] = []): Promise<ProfileReconciliation>',
-        description: 'Recompose the profile from its manifest and patch files, replacing running plugins whose loaded files below the profile directory or its linked package targets changed on disk, and publishing its runtime resolution. Changed modules are evicted and the Loader entries running them stop; app-boot\'s recomposeProfile then publishes the resolution, applies the generation, starts the stopped entries with the current files and configuration, imports entries whose import failed again, and judges activation. Afterwards the modules below the mappings the recomposition dropped are evicted, so a removed or deselected package is imported afresh when it returns. Callers run inside runExclusive.',
+        description: 'Recompose the profile from its manifest and patch files, replacing running plugins whose loaded files below the profile directory or its linked package targets changed on disk, and publishing its runtime resolution. A host-owned module source includes all its loaded file modules. Changed modules are evicted and the Loader entries running them stop; app-boot\'s recomposeProfile then publishes the resolution, applies the generation, starts the stopped entries with the current files and configuration, imports entries whose import failed again, and judges activation. Afterwards the modules below the mappings the recomposition dropped are evicted, so a removed or deselected package is imported afresh when it returns. Callers run inside runExclusive.',
         parameters: [{ name: 'requiredIds', description: 'Entry ids whose inactive state is reported as a failure even when it predates this call.' }],
         returns: 'Inactive-entry diagnostics, the changed modules that load after a restart, and a profile-wide restart reason.',
         throws: ['The patch read, publication, preparation, apply, or activation failure of the recomposition, including a replacement plugin that fails to load or start, whose previous code no longer runs.'],
+      },
+    ],
+  },
+  {
+    key: 'hmrModules',
+    summary: 'Host-owned module inspection and invalidation used by profile HMR.',
+    description: 'Host-owned module inspection and invalidation used by profile HMR.',
+    methods: [
+      {
+        signature: 'records(): readonly ReloadableModule[]',
+        description: 'Inspect the modules retained by this loader.',
+        parameters: [],
+        returns: 'A snapshot of evaluated, evaluating and failed module records.',
+      },
+      {
+        signature: 'protectedUrls(): readonly string[]',
+        description: 'Identify code that cannot be replaced within this host.',
+        parameters: [],
+        returns: 'Modules retained by the host bootstrap that require a host restart.',
+      },
+      {
+        signature: 'invalidate(urls: readonly string[]): void',
+        description: 'Evict the selected modules and cached package metadata before Loader imports their replacements. The caller owns dependency closure and serializes this operation with plugin teardown and activation.',
+        parameters: [{ name: 'urls', description: 'Canonical module URLs to evict.' }],
+        throws: ['If a protected module is selected; no records may be removed in that case.'],
       },
     ],
   },
@@ -6672,6 +6697,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'Reload',
     declaration: 'export interface Reload {\n    filename: string;\n    modules: ReloadModules;\n    runtime?: Plugin.Runtime | undefined;\n}',
+  },
+  {
+    name: 'ReloadableModule',
+    declaration: 'export interface ReloadableModule {\n    readonly url: string;\n    readonly exports: unknown;\n    readonly loaded: boolean;\n    readonly dependencies: readonly string[];\n}',
   },
   {
     name: 'RemoteAccessAction',

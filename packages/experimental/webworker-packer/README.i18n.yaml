@@ -15,14 +15,26 @@
   en: 4e53164159b5ce41
   zh: 89582dc0294d0776
 /deepseek-ai-dsh-experimental-webworker-packer/use-this-package:
-  en: 4b6067a6ffd4a33f
-  zh: 8790e1a070a7a0f3
+  en: 51884f4a3387ab35
+  zh: 1044a53c1c32943b
 /deepseek-ai-dsh-experimental-webworker-packer/model-experience:
-  en: e16b355530dadc1c
-  zh: 8488e03b253b7b33
-/deepseek-ai-dsh-experimental-webworker-packer/model-experience/kv-cache-effect:
-  en: ca75c51c89c2c9b0
-  zh: 64715dc7e6d02f71
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-experimental-webworker-packer/model-experience/worker-deployment-system-prompt:
+  en: 4218aeec640a9b43
+  zh: 148a8375e46d0798
+/deepseek-ai-dsh-experimental-webworker-packer/model-experience/worker-deployment-system-prompt/what-the-model-sees:
+  en: 1e67363a57c9b5dd
+  zh: 28a873e7fd71179e
+/deepseek-ai-dsh-experimental-webworker-packer/model-experience/worker-deployment-system-prompt/what-the-model-sees/default-web-image-prompt:
+  en: 68bfeb6474ccac94
+  zh: e4ae2ae6eb47fe6e
+/deepseek-ai-dsh-experimental-webworker-packer/model-experience/worker-deployment-system-prompt/token-effect:
+  en: 9e8707a50f34ea1d
+  zh: 96ecf0e182473be6
+/deepseek-ai-dsh-experimental-webworker-packer/model-experience/worker-deployment-system-prompt/kv-cache-effect:
+  en: cb359fd6a385ebb1
+  zh: 7046fd6ed08c66d7
 /deepseek-ai-dsh-experimental-webworker-packer/known-limitations-and-deferred-work:
   en: 6cd07b34072a2d61
   zh: 44c4017e727c19ff

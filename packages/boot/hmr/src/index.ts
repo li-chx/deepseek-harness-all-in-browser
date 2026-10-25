@@ -20,6 +20,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import picomatch from 'picomatch'
 import z from '@deepseek-ai/schemastery'
+import type { HmrModuleSource, ReloadableModule } from './module-source.ts'
+export type { HmrModuleSource, ReloadableModule } from './module-source.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -229,6 +231,7 @@ class Hmr extends Service {
 
   private readonly ownerContext: Context
   private internal: ModuleLoader
+  private readonly moduleSource: HmrModuleSource | undefined
   private watcher: FSWatcher | undefined
 
   /**
@@ -311,6 +314,7 @@ class Hmr extends Service {
       throw new Error('--expose-internals is required for HMR service')
     }
     this.internal = this.ctx.loader.internal
+    this.moduleSource = ctx.get('hmrModules')
     this.baseDir = fileURLToPath(new URL(config.base || '.', ctx.baseUrl))
   }
 
@@ -340,6 +344,10 @@ class Hmr extends Service {
 
   /** ES module cache keys and CommonJS cache filenames as URLs. */
   private* loadedUrls(): Generator<string> {
+    if (this.moduleSource !== undefined) {
+      yield* this.moduleSource.records().map(record => record.url)
+      return
+    }
     yield* this.esmUrls()
     for (const filename of Object.keys(commonJsCache())) yield pathToFileURL(filename).href
   }
@@ -354,8 +362,11 @@ class Hmr extends Service {
 
   async* [Service.init](): AsyncGenerator<() => Promise<void>, void, unknown> {
     const mainJob = this.mainJob()
+    const source = this.moduleSource
     let host: Promise<Set<string>> | undefined
-    this.hostModules = () => host ??= mainJob === undefined ? Promise.resolve(new Set()) : loadDependencies(mainJob, new Set(), true)
+    this.hostModules = source === undefined
+      ? () => host ??= mainJob === undefined ? Promise.resolve(new Set()) : loadDependencies(mainJob, new Set(), true)
+      : () => Promise.resolve(new Set(source.protectedUrls()))
     yield async () => {
       this.closing = true
       await this.watcher?.close()
@@ -454,7 +465,8 @@ class Hmr extends Service {
             fullReload = true
             continue
           }
-          if (this.esmHas(url) || this.esmHas(url, 'json')) {
+          if (this.moduleSource?.records().some(record => record.url === url)
+            || this.esmHas(url) || this.esmHas(url, 'json')) {
             this.stashed.add(url)
             continue
           }
@@ -471,7 +483,16 @@ class Hmr extends Service {
         }
         for (const include of includes) await include.refresh()
         if (this.stashed.size > 0) {
-          try { await this.partialReload() } finally { this.stashed.clear() }
+          try {
+            if (this.moduleSource === undefined) await this.partialReload()
+            else {
+              const result = await this.reconcileProfile()
+              for (const warning of result.warnings) this.ctx.logger.warn(warning)
+              if (result.restartReason !== undefined || result.pending.length > 0) {
+                this.ctx.logger.warn('restart required: %o', result)
+              }
+            }
+          } finally { this.stashed.clear() }
         }
         await loader.await()
       }).catch((error: unknown) => { this.ctx.logger.warn(error) })
@@ -776,10 +797,16 @@ class Hmr extends Service {
     }
   }
 
-  /** Loaded `file:` modules below the given profile roots. */
+  private invalidateModules(urls: Iterable<string>): void {
+    if (this.moduleSource !== undefined) this.moduleSource.invalidate([...urls])
+    else this.evict(urls)
+  }
+
+  /** Loaded profile modules, or every file module in a host-owned module source. */
   private profileModules(roots: readonly string[]): string[] {
     return [...this.loadedUrls()].filter((url) => {
       if (!url.startsWith('file:')) return false
+      if (this.moduleSource !== undefined) return true
       const filename = fileURLToPath(url)
       return roots.some(root => filename.startsWith(root))
     })
@@ -790,6 +817,12 @@ class Hmr extends Service {
     const importers = new Map<string, Set<string>>()
     const add = (parent: string, child: string) => {
       importers.set(child, (importers.get(child) ?? new Set()).add(parent))
+    }
+    if (this.moduleSource !== undefined) {
+      for (const record of this.moduleSource.records()) {
+        for (const dependency of record.dependencies) add(record.url, dependency)
+      }
+      return importers
     }
     await Promise.all([...moduleJobs(this.internal)].map(async (job) => {
       for (const child of await linkedJobs(job)) add(job.url, child.url)
@@ -815,6 +848,8 @@ class Hmr extends Service {
    * @returns The pending modules and the replacement of the others.
    */
   private async planReplacement(stale: ReadonlySet<string>, roots: readonly string[]): Promise<ReplacementPlan> {
+    const records = this.moduleSource === undefined ? undefined
+      : new Map(this.moduleSource.records().map(record => [record.url, record]))
     const importers = await this.moduleGraph()
     const host = await this.hostModules()
     const managed = new Set(this.ctx.loader.entries())
@@ -824,7 +859,7 @@ class Hmr extends Service {
     for (const url of stale) {
       const affected = new Set([url])
       for (const module of affected) for (const importer of importers.get(module) ?? []) affected.add(importer)
-      const running = [...new Set([...affected].flatMap(module => this.pluginsOf(module)))]
+      const running = [...new Set([...affected].flatMap(module => this.pluginsOf(module, records)))]
         .flatMap(plugin => [...this.ctx.registry.get(plugin)?.fibers ?? []].map(fiber => ({ plugin, fiber })))
       const affectedFibers = new Set(running.map(({ fiber }) => fiber))
       /** The Loader entry whose own fiber runs an affected plugin and starts this fiber directly or through its ancestors. */
@@ -857,9 +892,14 @@ class Hmr extends Service {
    * The plugins a loaded module exports, read from the ES module namespace and the CommonJS exports Node cached for it
    * without evaluating anything.
    * @param url Loaded module URL.
+   * @param records Host-owned module snapshot, when supplied by the runtime.
    * @returns The exported plugins.
    */
-  private pluginsOf(url: string): Plugin[] {
+  private pluginsOf(url: string, records?: ReadonlyMap<string, ReloadableModule>): Plugin[] {
+    if (records !== undefined) {
+      const record = records.get(url)
+      return record?.loaded === true ? [this.ctx.loader.unwrapExports(record.exports) as Plugin] : []
+    }
     const namespace = namespaceOf(this.esmJob(url))
     const required = url.startsWith('file:') ? commonJsCache()[fileURLToPath(url)] : undefined
     const exports: unknown = required?.loaded === true ? required.exports : undefined
@@ -873,7 +913,7 @@ class Hmr extends Service {
    */
   private async stopPlanned(plan: ReplacementPlan): Promise<void> {
     for (const manifest of plan.manifests) this.manifests.invalidate(manifest)
-    this.evict(plan.evicted)
+    this.invalidateModules(plan.evicted)
     // Deleting the runtime stops its fibers without the Loader recording the entries as disabled.
     for (const plugin of plan.plugins) this.ctx.registry.delete(plugin)
     // Cordis contains disposal failures in the fiber, which logs them.
@@ -895,7 +935,7 @@ class Hmr extends Service {
       return !host.has(url) && ![...kept].some(dir => filename.startsWith(dir))
     })
     for (const url of urls) for (const manifest of packageManifests(url, dropped)) this.manifests.invalidate(manifest)
-    this.evict(urls)
+    this.invalidateModules(urls)
   }
 
   /** Report a failed replacement step and retain the caller’s fallback outcome. */
@@ -911,7 +951,8 @@ class Hmr extends Service {
 
   /**
    * Recompose the profile from its manifest and patch files, replacing running plugins whose loaded files below the
-   * profile directory or its linked package targets changed on disk, and publishing its runtime resolution. Changed
+   * profile directory or its linked package targets changed on disk, and publishing its runtime resolution. A host-owned
+   * module source includes all its loaded file modules. Changed
    * modules are evicted and the Loader entries running them stop; app-boot's {@link recomposeProfile} then publishes the
    * resolution, applies the generation, starts the stopped entries with the current files and configuration,
    * imports entries whose import failed again, and judges activation. Afterwards the modules below the mappings the
@@ -941,10 +982,13 @@ class Hmr extends Service {
         const roots = profileRoots(profile.dir)
         return Promise.resolve({ roots, ...this.files.compare(this.profileModules(roots)) })
       }, undefined)
+      if (comparison !== undefined && this.moduleSource !== undefined) {
+        for (const url of this.stashed) comparison.stale.add(url)
+      }
       // Changed modules stay stale until replaced, including when the generation cannot be applied.
       pending = [...comparison?.stale ?? []].map(url => ({ url, reason: 'module-comparison' }))
       const compared = comparison
-      const unavailable = !this.hasEsmCache()
+      const unavailable = this.moduleSource === undefined && !this.hasEsmCache()
       if (!unavailable && compared !== undefined && pending.length > 0) {
         pending = await this.contained('planning module replacement', async () => {
           const plan = await this.planReplacement(compared.stale, compared.roots)
@@ -955,6 +999,10 @@ class Hmr extends Service {
       // Modules whose links or evaluation failed are evicted, so the recomposition retries failed imports against a
       // corrected file or a dependency installed since.
       await this.contained('expiring failed imports', () => {
+        if (this.moduleSource !== undefined) {
+          this.moduleSource.invalidate(this.moduleSource.records().filter(record => !record.loaded).map(record => record.url))
+          return
+        }
         // Without an ES module cache no failed module is known.
         if (unavailable) return
         const roots = compared?.roots ?? [realpathSync(profile.dir) + sep]
@@ -1018,8 +1066,8 @@ export interface ProfileReconciliation {
 export interface PendingModule {
   url: string
   /**
-   * `host-module`: the process entry point's static graph imports it. `unmanaged-plugin`: it is imported by a plugin
-   * that runs outside a traversable Loader entry. `module-comparison`: loaded modules could not be compared with disk.
+   * `host-module`: the host protects it or the process entry point's static graph imports it. `unmanaged-plugin`: a
+   * plugin outside a traversable Loader entry imports it. `module-comparison`: loaded modules could not be compared with disk.
    */
   reason: 'host-module' | 'unmanaged-plugin' | 'module-comparison'
 }

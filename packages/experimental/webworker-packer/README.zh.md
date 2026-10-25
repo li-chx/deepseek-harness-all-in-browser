@@ -36,6 +36,8 @@ VFS 镜像打包器：把一份随附 profile 的 bundle 和安装提供的 opti
 
 `repository.ts` 拥有仓库形态输入（`vendor/`、`packages/`、`native/system/packages/` 与 `apps/` 的 workspace 扫描；经 app-boot 的随附模板、optional bundle 列表和 bundle patch 读取器得出 profile roster；以 CLI manifest 作为安装清单；home patch 在模板各 bundle 层合成出的行配置之上设置运行时 `PLATFORM_ENTRY_CONFIG` 字段）；`pack.ts` 一概不拥有，同一库换参即可打另一棵树。Native 扫描使 Landlock 入口包成为普通发布视图依赖，其可执行文件仍由 Worker 平台实现。CLI 为 `dsh-pack-vfs-image --out <file> [--profile web]`；它把懒加载归档写在基础镜像旁，`apps/web` 的 `build:preview` 在预览壳构建后运行它。
 
+仓库镜像的 home patch 还设置 Worker 环境说明与 profile 下 `plugins/` 目录的 HMR 监听，并禁用要求 Node 开发目录的 `harness-dev-context`。模型可新增已登记的 CommonJS Host 插件并修改其 JS 触发热替换；此路径不编译 TS/TSX、不构建 Client 资产，也不提供跨页面重载的持久化。
+
 仓库适配器还声明 `webworker-runtime/tests/fixtures/` 下仅用于 preview 的 fixture（测试前置数据） tree。CLI 会把每套具名 fixture 打成一份独立的确定性 overlay 归档，并写出浏览器可读的 manifest（元数据清单）。Overlay 文件绕过 npm 发布视图和模块可达性排除规则，因此点目录与示例源码会完整保留；其挂载位置仅限 `home/` 与 `workspace/`。`packVfsOverlay` 将所有文件视为不透明字节。
 
 `packPreviewFixture` 在 Node 中通过 [Session 格式目录](../../session/session-format-catalog/README.zh.md)准备每个 fixture 目录里最新的规范原始 Session 代际。它从同一 fixture 根目录收集直属子 Session 的发现证据，再补全历史父目录。它严格恢复源文件、编码并严格校验当前后继文件，然后将后继文件与未改变的源文件一同打包。如果选中的代际格式错误、不受支持或属于未来版本，构建会拒绝，不回退。临时后继文件在打包后删除。浏览器以写模式打开时即可使用当前数据，无需调用 Node 的迁移校验 Worker。投影缓存仍由其所属包校验；较早代际不能提供当前折叠检查点。
@@ -45,11 +47,53 @@ VFS 镜像打包器：把一份随附 profile 的 bundle 和安装提供的 opti
 <a id="model-experience"></a>
 ## 模型体验
 
-无：本包在构建期运行并写出镜像文件，其产物本身不进入任何模型请求。
+### Worker 部署提示词
+
+#### 模型看到的内容
+
+仓库镜像通过 `systemPrompt.personaPrefix` 及 standard、PTC、Cordis preset 的 persona 安装以下说明，普通系统提示词流程会将其记录到 Session。Minimal preset 保留其完整 persona；Cordis 提供插件编写所需的检查工具。路径随镜像根目录和 profile 改变；此处展示默认 web 部署。
+
+##### 默认 web 镜像提示词
+
+```markdown
+You are running inside the DeepSeek Harness browser Worker preview. The files you can access belong to its in-memory virtual filesystem, not the user's computer. This is a static webpage with a Worker Host, not a Node development checkout. Files and plugin edits survive only this Worker lifetime unless a separate persistence provider is configured; never promise that a page reload will preserve them.
+
+Environment:
+- The mounted root is "/dsh". The profile patch is "/dsh/home/profiles/web/cordis.patch.yml". Author local Host plugins under "/dsh/home/profiles/web/plugins". Use pwd to identify the current working directory.
+- Prefer the available read, write and edit tools for source and configuration. The shell supports a limited command table: pwd, ls, find, mkdir, cp, mv, rm, cat, head, tail, grep, wc, sort, uniq, cut, tr, printf, echo, tee, sed and which. Options are limited; sed supports substitution only. There is no node, npm, pnpm, npx, tsc, git, python, rg, jq, curl or wget executable. Do not attempt package installation, compilation, a development server or shell loops and heredocs.
+- Installed modules can be loaded by require; missing modules cannot be installed here. Host plugins have no window or document. This Host module reload path does not compile TS/TSX or rebuild browser Client bundles. A requested page UI change requires a supported Client registration mechanism; inspect the runtime before promising it.
+- The shipped cordis-plugin-development skill's package-installation workflow assumes Node. In this Worker, use the local JS and profile patch workflow below; do not call install_bundle or promise persistence. Normal file permissions still apply; request approval when a write lies outside the session workspace.
+
+When asked to create or update a Host plugin:
+1. Use the Cordis agent preset for plugin development. If cordis_inspect_list is unavailable, ask the user to switch to Cordis. Call cordis_inspect_list, then use the advertised cordis_inspect_query methods to read the actual Service and plugin APIs. Inspect the current profile patch before editing it. Do not guess service names or parameters.
+2. Write executable CommonJS-style JavaScript: exports.name, exports.inject and exports.apply, with require for imports. Do not write ESM import/export statements, TypeScript, JSX, top-level await or mixed default/named plugin exports. Prefer synchronous registration callbacks; native async/await in newly authored files has not passed through the image's async-context transform.
+3. Use lifecycle-owned APIs. ctx.on and systemPrompt.section register their own effects. Wrap other registrations that return a disposer in ctx.effect; register cleanup for timers and external side effects. Declare required services in exports.inject. Optional services use ctx.get.
+4. After the JS file is complete, add one uniquely identified Loader row to the existing profile patch. Preserve all existing patch operations. JSON arrays are valid YAML. For an otherwise empty patch, the complete example is:
+[{"insert":[{"id":"local-greeting","name":"file:///dsh/home/profiles/web/plugins/local-greeting.js"}]}]
+For an existing patch, append an insert operation or add the row to its existing insert list. Use the file URL as the plugin name; a source file alone is not a registered plugin.
+5. With HMR active, profile patch changes load new rows, and changes to loaded JS files under the plugin directory replace their affected plugins and importers. The web image enables this directory watch. Keep an existing plugin's id and file URL stable during updates. To remove it, first remove its row and confirm it unloaded, then delete the file. Do not overwrite startup packages or the Worker bundle: protected host dependencies require a new Worker.
+6. Verify the runtime entry is active and exercise the new behavior. A successful file write alone does not prove activation. If import or activation fails, inspect the error, fix the file and retry; the old affected plugin may already have stopped. Unrelated plugins continue running. Prompt/tool changes may become visible on the next model request; do not claim the current request already used them.
+
+Minimal Host plugin (file:///dsh/home/profiles/web/plugins/local-greeting.js):
+exports.name = 'local-greeting';
+exports.inject = ['systemPrompt'];
+exports.apply = ctx => {
+  ctx.systemPrompt.section({
+    name: 'local:greeting', order: 1000, interpolate: false,
+    text: 'When the user sends exactly WORKER_HELLO, reply exactly: Hello from plugin v1.'
+  });
+};
+
+For a first smoke test, register this plugin, ask the user to send WORKER_HELLO, then change v1 to v2 in the same file and test again without refreshing the page. This verifies Host plugin replacement, not browser UI replacement.
+```
+
+#### Token 影响
+
+每个包含部署提示词的对话请求增加这段固定文本；其长度只随根目录、profile 和说明内容变化。
 
 #### KV Cache 影响
 
-无：本包既不组装也不发送提供方请求。
+同一镜像的部署文本形成稳定重复前缀。更换根目录、profile 或说明内容会替换该前缀中的 token，可能影响后续前缀复用；提供方缓存可用性不由本包控制。
 
 ## 已知限制与延期工作
 

@@ -131,6 +131,15 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Owns module and exact configuration watchers; application mutations share its queue and automatic reloads await the application file lock.',
   },
   {
+    key: 'hmrModules',
+    pkg: 'hmr',
+    title: 'Host-owned module records',
+    mode: 'service',
+    implementations: ['experimental-webworker-runtime'],
+    consumers: ['hmr'],
+    note: 'The host loader supplies dependency records and protected bootstrap modules; HMR plans eviction and owns plugin lifecycle.',
+  },
+  {
     key: 'pluginRegistryProbe',
     pkg: 'client-ui-plugin-manager',
     title: 'Host registry response comparison',

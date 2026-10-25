@@ -15,6 +15,7 @@ import { createAlsRuntime, type AlsCausality, type AlsRuntime } from '../polyfil
 import { createCascadedLoader, type CascadedLoader } from '../node/internal_modules/esm-loader.ts'
 import { dirname, fileUrlToPath, isAbsolute, join, pathToFileUrl, resolve as resolvePath } from './posix-path.ts'
 import { WRAPPER_PARAMS } from '../image-layout.ts'
+import type { HmrModuleSource } from '@deepseek-ai/dsh-hmr'
 import type { MemoryVfs } from '../storage/memory.ts'
 
 /** Condition keys honoured in `exports`, in order; `node` is deliberately absent. */
@@ -56,6 +57,8 @@ export interface WorkerInternalResolution {
 
 interface ModuleRecord {
   readonly module: { exports: unknown }
+  readonly dependencies: Set<string>
+  state: 'loading' | 'loaded' | 'failed'
 }
 
 /** Resolution helpers carried by a Worker-backed CommonJS require. */
@@ -122,6 +125,7 @@ export class WorkerModuleLoader {
   private readonly modules = new Map<string, ModuleRecord>()
   private readonly manifests = new Map<string, PackageManifest>()
   private readonly stack: string[] = []
+  private readonly bootstrapModules = new Set<string>()
   private cascaded: CascadedLoader | undefined
 
   /**
@@ -344,14 +348,14 @@ export class WorkerModuleLoader {
     if (resolution.kind === 'static') return resolution.factory()
     const path = resolution.path
     const cached = this.modules.get(path)
-    if (cached !== undefined) return cached.module.exports
+    if (cached !== undefined && cached.state !== 'failed') return cached.module.exports
     if (path.endsWith('.json')) {
       const parsed: unknown = JSON.parse(this.vfs.readFileSync(path, 'utf8') as string)
-      this.modules.set(path, { module: { exports: parsed } })
+      this.modules.set(path, { module: { exports: parsed }, dependencies: new Set(), state: 'loaded' })
       return parsed
     }
     const exports: Record<string, unknown> = {}
-    const record: ModuleRecord = { module: { exports } }
+    const record: ModuleRecord = { module: { exports }, dependencies: new Set(), state: 'loading' }
     this.modules.set(path, record)
     this.stack.push(path)
     try {
@@ -360,7 +364,7 @@ export class WorkerModuleLoader {
       const directory = dirname(path)
       factory(
         record.module.exports,
-        this.requireFrom(directory),
+        this.requireForModule(directory, path, record),
         record.module,
         path,
         directory,
@@ -376,9 +380,10 @@ export class WorkerModuleLoader {
         },
         this.als,
       )
+      record.state = 'loaded'
       return record.module.exports
     } catch (reason) {
-      this.modules.delete(path)
+      record.state = 'failed'
       throw reason
     } finally {
       this.stack.pop()
@@ -417,7 +422,17 @@ export class WorkerModuleLoader {
    * @returns Callable require with `resolve`.
    */
   requireFrom(fromDirectory: string): WorkerRequire {
-    const require = (specifier: string): unknown => this.load(this.resolve(specifier, fromDirectory))
+    return this.requireForModule(fromDirectory)
+  }
+
+  private requireForModule(fromDirectory: string, owner?: string, record?: ModuleRecord): WorkerRequire {
+    const require = (specifier: string): unknown => {
+      const resolution = this.resolve(specifier, fromDirectory)
+      if (resolution.kind === 'file' && owner !== undefined && record !== undefined && this.modules.get(owner) === record) {
+        record.dependencies.add(resolution.path)
+      }
+      return this.load(resolution)
+    }
     const resolve = ((specifier: string): string => {
       const resolution = this.resolve(specifier, fromDirectory)
       if (resolution.kind === 'static') {
@@ -439,7 +454,37 @@ export class WorkerModuleLoader {
    * @returns Require bound to that base.
    */
   createRequire(base: string | URL): WorkerRequire {
-    return this.requireFrom(this.baseDirectoryOf(base))
+    const path = base instanceof URL ? fileUrlToPath(base.href)
+      : base.startsWith('file:') ? fileUrlToPath(base) : resolvePath(base)
+    return this.requireForModule(this.baseDirectoryOf(base), path, this.modules.get(path))
+  }
+
+  /** Retain modules already loaded by the host before the plugin tree starts. */
+  protectBootstrap(): void {
+    for (const path of this.modules.keys()) this.bootstrapModules.add(path)
+  }
+
+  /** Module records and invalidation owned by this loader; no Node module jobs are synthesized. */
+  readonly hmrModules: HmrModuleSource = {
+    records: () => [...this.modules].map(([path, record]) => ({
+      url: pathToFileUrl(path), exports: record.module.exports, loaded: record.state === 'loaded',
+      dependencies: [...record.dependencies].map(pathToFileUrl),
+    })),
+    protectedUrls: () => {
+      const retained = new Set(this.bootstrapModules)
+      for (const path of retained) {
+        for (const dependency of this.modules.get(path)?.dependencies ?? []) retained.add(dependency)
+      }
+      return [...retained].map(pathToFileUrl)
+    },
+    invalidate: (urls) => {
+      const protectedUrls = new Set(this.hmrModules.protectedUrls())
+      for (const url of urls) {
+        if (protectedUrls.has(url)) throw new Error(`Worker bootstrap module requires a restart: ${url}`)
+      }
+      for (const url of urls) this.modules.delete(fileUrlToPath(url))
+      if (urls.length > 0) this.manifests.clear()
+    },
   }
 
   /**

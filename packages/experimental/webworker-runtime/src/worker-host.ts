@@ -237,8 +237,10 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
 
       const { patches, profile, environment } = prepareProfile(appBoot, mounted, manifest, root, processShim.env)
       const profileConfig = join(profile.dir, 'cordis.yml')
+      loader.protectBootstrap()
       const ctx = await appBoot.boot(BIN_NAME, profileConfig, patches, async (hostCtx) => {
         hostCtx.provide('profileContext', profile)
+        hostCtx.provide('hmrModules', loader.hmrModules)
         hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment)
         installLogSink(hostCtx, require)
         // Package lookup without a runtime resolution: the Worker loader owns

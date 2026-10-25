@@ -47,10 +47,24 @@ describe('profile roster', () => {
 
 describe('platform home patch', () => {
   it('keeps the composed JSONL row config and sets the plaintext compression the Worker requires', () => {
-    expect(platformHomePatch(repoRoot, 'web')).toEqual([{
+    expect(platformHomePatch(repoRoot, 'web')).toContainEqual({
       id: 'session-persistence-jsonl',
       config: { root: { __jsExpr: "dshHomePath('sessions')" }, compression: 'none' },
-    }])
+    })
+  })
+
+  it('uses the mounted root for plugin watching and guidance and disables Node checkout instructions', () => {
+    const patch = platformHomePatch(repoRoot, 'web', '/virtual')
+    expect(patch).toContainEqual({ id: 'hmr', config: { root: ['/virtual/home/profiles/web/plugins'] } })
+    expect(patch).toContainEqual({ id: 'harness-dev-context', disabled: true })
+    expect(patch.find(row => row.id === 'system-prompt')?.config)
+      .toHaveProperty('personaPrefix', expect.stringContaining('/virtual/home/profiles/web/cordis.patch.yml'))
+    for (const id of ['preset-standard', 'preset-ptc', 'preset-cordis']) {
+      const config: unknown = patch.find(row => row.id === id)?.config
+      expect(JSON.stringify(config)).toContain('/virtual/home/profiles/web/cordis.patch.yml')
+      expect(JSON.stringify(config)).toContain('You are a coding agent powered by the {{model}} model.')
+    }
+    expect(patch.some(row => row.id === 'preset-minimal')).toBe(false)
   })
 })
 

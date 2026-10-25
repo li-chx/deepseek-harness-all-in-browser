@@ -50,12 +50,16 @@ interface ProfileReconciliation {
 interface PendingModule {
   url: string
   /**
-   * `host-module`: the process entry point's static graph imports it. `unmanaged-plugin`: it is imported by a plugin
-   * that runs outside a traversable Loader entry. `module-comparison`: loaded modules could not be compared with disk.
+   * `host-module`: the host protects it or the process entry point's static graph imports it. `unmanaged-plugin`: a
+   * plugin outside a traversable Loader entry imports it. `module-comparison`: loaded modules could not be compared with disk.
    */
   reason: 'host-module' | 'unmanaged-plugin' | 'module-comparison'
 }
 ```
+
+## Host 模块来源
+
+`HmrModuleSource` 允许宿主在 HMR 启动前提供 `hmrModules`。`records()` 返回 `ReloadableModule` 快照，其中包含规范文件 `url`、当前 `exports`、求值成功标志 `loaded`，以及已观察到的文件 URL `dependencies`。`protectedUrls()` 列出保留至宿主重启的启动模块。`invalidate(urls)` 删除选定记录和解析元数据；若选中了受保护 URL，必须在删除任何记录前拒绝操作。HMR 负责依赖闭包、串行执行和插件生命周期；宿主 loader 负责求值。未提供此 provider 的宿主使用 Node 原生模块缓存。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -120,7 +124,8 @@ async getLinked(url: string): Promise<string[]>
 
 /**
  * Recompose the profile from its manifest and patch files, replacing running plugins whose loaded files below the
- * profile directory or its linked package targets changed on disk, and publishing its runtime resolution. Changed
+ * profile directory or its linked package targets changed on disk, and publishing its runtime resolution. A host-owned
+ * module source includes all its loaded file modules. Changed
  * modules are evicted and the Loader entries running them stop; app-boot's {@link recomposeProfile} then publishes the
  * resolution, applies the generation, starts the stopped entries with the current files and configuration,
  * imports entries whose import failed again, and judges activation. Afterwards the modules below the mappings the
@@ -135,6 +140,36 @@ async reconcileProfile(requiredIds: readonly string[] = []): Promise<ProfileReco
 ```
 
 Source: [`packages/boot/hmr/src/index.ts`](../../packages/boot/hmr/src/index.ts)
+
+<a id="ctxhmrmodules--hmrmodulesource"></a>
+
+### `ctx.hmrModules` — `HmrModuleSource`
+
+Host-owned module inspection and invalidation used by profile HMR.
+
+```ts cordis-catalog
+/**
+ * Inspect the modules retained by this loader.
+ * @returns A snapshot of evaluated, evaluating and failed module records.
+ */
+records(): readonly ReloadableModule[]
+
+/**
+ * Identify code that cannot be replaced within this host.
+ * @returns Modules retained by the host bootstrap that require a host restart.
+ */
+protectedUrls(): readonly string[]
+
+/**
+ * Evict the selected modules and cached package metadata before Loader imports their replacements.
+ * The caller owns dependency closure and serializes this operation with plugin teardown and activation.
+ * @param urls - Canonical module URLs to evict.
+ * @throws If a protected module is selected; no records may be removed in that case.
+ */
+invalidate(urls: readonly string[]): void
+```
+
+Source: [`packages/boot/hmr/src/module-source.ts`](../../packages/boot/hmr/src/module-source.ts)
 
 <a id="ctxpluginmanager--pluginmanager"></a>
 

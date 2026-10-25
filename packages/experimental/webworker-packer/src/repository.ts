@@ -8,13 +8,14 @@
  * @module @deepseek-ai/dsh-experimental-webworker-packer/src/repository
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, posix, relative } from 'node:path'
 import {
   bundlePatchPaths, composeEntries, loadOverlayPatches, OPTIONAL_BUNDLES, PROFILE_TEMPLATES, resolveBundleDir,
 } from '@deepseek-ai/dsh-app-boot'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
-import { PLATFORM_ENTRY_CONFIG } from '@deepseek-ai/dsh-experimental-webworker-runtime'
+import { DEFAULT_ROOT, PLATFORM_ENTRY_CONFIG } from '@deepseek-ai/dsh-experimental-webworker-runtime'
 import { collectModuleNames, packVfsImage, type ConfigTree, type ImageInstallation, type ImageTree, type PackResult } from './pack.ts'
+import { workerAuthoringPrompt } from './worker-authoring.ts'
 
 export { packPreviewFixture } from './preview.ts'
 
@@ -113,22 +114,51 @@ export function profileRoster(repoRoot: string, profile: string): ProfileRoster 
 }
 
 /**
- * The home patch one shipped profile's image carries: every row `PLATFORM_ENTRY_CONFIG` names, with the config the
- * template's bundle layers compose for it and the Worker's required fields over that config. A patch replaces a row's
- * whole config, so the composed fields stay; the image carries the same bundle files read here.
+ * The image home patch applies Worker platform fields, deployment guidance and the local plugin watch,
+ * and disables Node checkout guidance. Each config retains fields composed from the profile bundles.
  * @param repoRoot - Absolute repository root.
  * @param profile - Shipped profile template name.
+ * @param root - Mounted virtual filesystem root.
  * @returns Home patch rows; a row the composition lacks contributes none.
  * @throws When the profile has no shipped template, or a bundle does not resolve or declares no patch.
  */
-export function platformHomePatch(repoRoot: string, profile: string): PatchOptions[] {
+export function platformHomePatch(repoRoot: string, profile: string, root = DEFAULT_ROOT): PatchOptions[] {
   const composed: unknown = composeEntries([shippedTemplate(profile).bundles.flatMap(bundle => bundlePatches(repoRoot, bundle))])
-  return Object.entries(PLATFORM_ENTRY_CONFIG).flatMap(([id, fields]) => {
+  const guidance = workerAuthoringPrompt(root, profile)
+  const fieldsById = {
+    ...PLATFORM_ENTRY_CONFIG,
+    'system-prompt': { personaPrefix: guidance },
+    hmr: { root: [posix.join(root, 'home/profiles', profile, 'plugins')] },
+  }
+  const patches: PatchOptions[] = Object.entries(fieldsById).flatMap(([id, fields]) => {
     const row = findRow(composed, id)
     if (row === undefined) return []
     const config = typeof row.config === 'object' && row.config !== null && !Array.isArray(row.config) ? row.config : {}
     return [{ id, config: { ...config, ...fields } }]
   })
+  for (const id of ['preset-standard', 'preset-ptc', 'preset-cordis']) {
+    const row = findRow(composed, id)
+    if (row === undefined) continue
+    const config = asConfig(row.config, id)
+    if (!Array.isArray(config.plugins)) throw new Error(`vfs image: ${id} has no plugin list`)
+    const pluginRows = config.plugins.map((value: unknown) => asConfig(value, id))
+    if (!pluginRows.some(plugin => plugin.id === 'persona')) throw new Error(`vfs image: ${id} has no persona row`)
+    const plugins = pluginRows.map((plugin) => {
+      if (plugin.id !== 'persona') return plugin
+      const persona = asConfig(plugin.config, `${id}/persona`)
+      if (typeof persona.prefix !== 'string') throw new Error(`vfs image: ${id}/persona has no text prefix`)
+      return { ...plugin, config: { ...persona, prefix: `${persona.prefix}\n\n${guidance}` } }
+    })
+    patches.push({ id, config: { ...config, plugins } })
+  }
+  if (findRow(composed, 'harness-dev-context') !== undefined) patches.push({ id: 'harness-dev-context', disabled: true })
+  return patches
+}
+
+/** Read a composed preset mapping before adding deployment instructions. */
+function asConfig(value: unknown, id: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(`vfs image: ${id} must be a mapping`)
+  return value as Record<string, unknown>
 }
 
 /** Find one Loader row by id, inside group configs too. */
@@ -186,7 +216,7 @@ export function packRepositoryImage(repoRoot: string, profile: string, root?: st
     workspaces: indexWorkspacePackages(repoRoot),
     resolveFrom: repoRoot,
     configTrees: configTrees(repoRoot),
-    homePatch: platformHomePatch(repoRoot, profile),
+    homePatch: platformHomePatch(repoRoot, profile, root),
   })
 }
 
