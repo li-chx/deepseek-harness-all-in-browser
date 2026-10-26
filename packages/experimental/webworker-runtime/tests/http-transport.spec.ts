@@ -86,6 +86,20 @@ it('relays abort after response headers and closes an active provider body', asy
   await cancelled.promise
 })
 
+it('releases a resource bridge registration once when its request port closes', async () => {
+  const channel = new MessageChannel()
+  const closed = Promise.withResolvers<undefined>()
+  const notify = vi.fn(() => { closed.resolve(undefined) })
+  const dispose = serveHttpTransport(channel.port1, { fetch: async () => new Response('resource') }, notify)
+  const http = new PortHttpTransport(channel.port2)
+  cleanup.push(dispose, () => { http.close() })
+  expect(await (await http.fetch(new Request('https://test/resource.js'))).text()).toBe('resource')
+  http.close()
+  await closed.promise
+  dispose()
+  expect(notify).toHaveBeenCalledOnce()
+})
+
 it('rejects malformed replies and premature end without leaving pending requests', async () => {
   for (const malformed of [{ t: 'end', id: 1 }, { t: 'response', id: 1, status: 204, statusText: 'No Content',
     headers: [], body: new ReadableStream(), url: 'https://test/', type: 'default', redirected: false }]) {

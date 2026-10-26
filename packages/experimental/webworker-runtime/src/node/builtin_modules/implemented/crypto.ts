@@ -5,12 +5,14 @@
  */
 import { sha1 } from '@noble/hashes/legacy.js'
 import { sha256, sha512 } from '@noble/hashes/sha2.js'
+import { hmac } from '@noble/hashes/hmac.js'
+import type { CHash } from '@noble/hashes/utils.js'
 import { randomUUID as mintUUID } from '@deepseek-ai/dsh-util-crypto'
 import { Buffer } from 'buffer'
 
 type Hasher = (input: Uint8Array) => Uint8Array
 
-const HASHERS: Record<string, Hasher> = {
+const HASHERS: Record<string, CHash> = {
   sha1,
   sha256,
   sha512,
@@ -41,6 +43,10 @@ export function createHash(algorithm: string): Hash {
   if (hasher === undefined) {
     throw new Error(`web-preview: node:crypto.createHash("${algorithm}") is not available in the worker host`)
   }
+  return hashObject(hasher)
+}
+
+function hashObject(hasher: Hasher): Hash {
   const chunks: Uint8Array[] = []
   const hash: Hash = {
     update(data) {
@@ -60,6 +66,33 @@ export function createHash(algorithm: string): Hash {
     },
   }
   return hash
+}
+
+/** Create the synchronous HMAC used by Host browser-session signatures.
+ * @param algorithm Supported digest name.
+ * @param key UTF-8 text or key bytes, copied at creation.
+ * @returns Streaming update/digest operations backed by Noble HMAC.
+ */
+export function createHmac(algorithm: string, key: string | Uint8Array | ArrayBuffer): Hash {
+  const hasher = HASHERS[algorithm.toLowerCase().replace('-', '')]
+  if (hasher === undefined) throw new Error(`web-preview: unsupported HMAC digest ${algorithm}`)
+  const secret = Uint8Array.from(toBytes(key))
+  return hashObject(bytes => hmac(hasher, secret, bytes))
+}
+
+/** Compare every byte without a data-dependent early return; JavaScript provides no native timing guarantee.
+ * @param left First byte sequence.
+ * @param right Equally sized byte sequence.
+ * @returns Whether all bytes match.
+ * @throws When lengths differ, matching Node's refusal.
+ */
+export function timingSafeEqual(left: NodeJS.ArrayBufferView, right: NodeJS.ArrayBufferView): boolean {
+  if (left.byteLength !== right.byteLength) throw new RangeError('Input buffers must have the same byte length')
+  const a = new DataView(left.buffer, left.byteOffset, left.byteLength)
+  const b = new DataView(right.buffer, right.byteOffset, right.byteLength)
+  let difference = 0
+  for (let index = 0; index < a.byteLength; index++) difference |= a.getUint8(index) ^ b.getUint8(index)
+  return difference === 0
 }
 
 /**
@@ -109,18 +142,18 @@ export const webcrypto = globalThis.crypto
 export const __esModule = true
 
 /**
- * The `node:crypto` declarations this module stands in for. Three members keep
+ * The `node:crypto` declarations this module stands in for. Four members keep
  * this module's own types: Node declares `createHash` as returning a Transform
- * stream, while this Hash is the synchronous update/digest pair the host tree
+ * stream, as does `createHmac`, while this Hash is the synchronous update/digest pair the host tree
  * calls; `webcrypto` is the browser `Crypto` object, whose `subtle` face is
  * declared by the DOM library rather than by Node; and `getRandomValues` accepts
  * only a typed-array view, the values WebCrypto can fill, where Node's
  * declaration also admits a bare `ArrayBuffer`.
  */
-type NodeFace = Partial<Omit<typeof import('node:crypto'), 'createHash' | 'getRandomValues' | 'webcrypto'>>
-  & Record<'createHash' | 'getRandomValues' | 'webcrypto', unknown>
+type NodeFace = Partial<Omit<typeof import('node:crypto'), 'createHash' | 'createHmac' | 'getRandomValues' | 'webcrypto'>>
+  & Record<'createHash' | 'createHmac' | 'getRandomValues' | 'webcrypto', unknown>
 
 /** CommonJS default export: the members `require()` hands a caller of this module. */
 export default {
-  createHash, randomBytes, randomUUID, getRandomValues, randomInt, webcrypto,
+  createHash, createHmac, timingSafeEqual, randomBytes, randomUUID, getRandomValues, randomInt, webcrypto,
 } satisfies NodeFace

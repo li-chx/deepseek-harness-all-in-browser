@@ -461,6 +461,24 @@ it('requires both physical Client entries only for opted-in packages', () => {
   }
 })
 
+it('excludes the preview Service Worker from the published Web application', () => {
+  const dir = 'apps/web'
+  const manifest = JSON.parse(readFileSync(new URL(`../${dir}/package.json`, import.meta.url), 'utf8')) as WorkspaceManifest['manifest']
+  expect(checkWorkspaceManifest({ dir, manifest })).toEqual([])
+  expect(checkWorkspaceManifest({ dir, manifest: { ...manifest,
+    files: manifest.files!.filter(file => file !== '!dist/preview-service-worker.js'),
+  } })).toEqual([expect.stringContaining('package.json files must be')])
+})
+
+it('publishes the resource bridge in the experimental Worker runtime', () => {
+  const dir = 'packages/experimental/webworker-runtime'
+  const manifest = JSON.parse(readFileSync(new URL(`../${dir}/package.json`, import.meta.url), 'utf8')) as WorkspaceManifest['manifest']
+  expect(checkWorkspaceManifest({ dir, manifest })).toEqual([])
+  expect(checkWorkspaceManifest({ dir, manifest: { ...manifest,
+    files: manifest.files!.filter(file => file !== 'lib/service-worker.js'),
+  } })).toEqual([expect.stringContaining('package.json files must be')])
+})
+
 it('requires the standalone shortcut protocol and rejects unrelated runtime files', () => {
   const dir = 'packages/client/shortcuts'
   const manifest = JSON.parse(readFileSync(new URL(`../${dir}/package.json`, import.meta.url), 'utf8')) as WorkspaceManifest['manifest']

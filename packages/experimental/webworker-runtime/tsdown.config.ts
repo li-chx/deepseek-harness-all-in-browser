@@ -50,9 +50,9 @@ const moduleProxyPlugin = {
 }
 
 /**
- * Three artifacts from one pipeline: the runtime library the worker bundle is
+ * Four artifacts from one pipeline: the runtime library the worker bundle is
  * built from (neutral), the worker bundle itself (browser, single file), and
- * the page half a deployment's shell imports (browser).
+ * the page half a deployment's shell imports, and the Service Worker resource bridge (browser).
  */
 export default defineConfig([{
   entry: ['src/index.ts'],
@@ -93,4 +93,15 @@ export default defineConfig([{
   dts: false,
   clean: false,
   outputOptions: { entryFileNames: 'client.js' },
+}, {
+  entry: ['src/service-worker.ts'],
+  outDir: 'lib',
+  format: ['esm'],
+  platform: 'browser',
+  target: 'es2022',
+  fixedExtension: false,
+  dts: false,
+  clean: false,
+  noExternal: [/.*/],
+  outputOptions: { inlineDynamicImports: true },
 }])

@@ -78,7 +78,7 @@ const appPackageFiles: Readonly<Record<string, readonly string[]>> = {
   // Sourcemaps stay out by payload policy; the worker-preview surface
   // (dist/preview.html and dist/preview/) backs opt-in experimental
   // packages and is not published.
-  '@deepseek-ai/dsh-web-frontend': ['dist', '!dist/**/*.map', '!dist/preview.html', '!dist/preview'],
+  '@deepseek-ai/dsh-web-frontend': ['dist', '!dist/**/*.map', '!dist/preview.html', '!dist/preview-service-worker.js', '!dist/preview'],
 }
 
 /** The subset of package.json fields this constraint check cares about. */
@@ -291,6 +291,8 @@ export function expectedDshPackageFiles(manifest: PackageManifest): readonly str
     // subpath may instead expose a browser-safe emitted source tree.
     ...browserClient === './lib/client.js' ? ['lib/client.js'] : [],
     ...browserClient === './lib/client.browser.js' ? ['lib/client.browser.js'] : [],
+    ...exportDefault(manifest, './service-worker') === './lib/service-worker.js' ? ['lib/service-worker.js'] : [],
+    ...exportDefault(manifest, './platform') === './lib/platform.js' ? ['lib/platform.js'] : [],
     ...exportCondition(manifest, './client', 'node') === './lib/client.node.js' ? ['lib/client.node.js'] : [],
     // runtime's shell-held loader subpath ships as its own bundle beside the client half.
     ...exportDefault(manifest, './loader') === './lib/loader.js' ? ['lib/loader.js'] : [],

@@ -18,6 +18,7 @@ import { PREVIEW_FIXTURE_MANIFEST_FILE } from '../fixture-manifest.ts'
 import { WorkerTunnel, type TunnelFetch } from './client.ts'
 import { applyIndexInjections } from './apply-injections.ts'
 import { choosePreviewSource } from './source-chooser.ts'
+import { connectServiceWorker } from './service-worker.ts'
 
 export { serveHttpTransport, PortHttpTransport } from '../transport/http-port.ts'
 export { WorkerHttpTransport, type HttpTransport, type HttpFetch } from '../transport/http-transport.ts'
@@ -74,6 +75,8 @@ interface ClientFileUploadGlobal {
 
 /** Inputs for {@link connectWorkerHost}. */
 export interface WorkerHostConnectOptions {
+  /** Optional same-origin Service Worker module beside preview.html; requires HTTPS or loopback HTTP. */
+  readonly serviceWorker?: string | URL
   /** Isolated browser persistence; omission keeps the filesystem ephemeral. */
   readonly storage?: TunnelStorageInit
   /** Page-owned outbound HTTP provider, reached through a dedicated port with streaming and abort frames. */
@@ -107,6 +110,8 @@ export interface WorkerHostConnection {
   readonly worker: Worker
   /** Abort and detach the optional page HTTP provider; Worker and tunnel ownership stay with the caller. */
   disposeHttp(): void
+  /** Stop forwarding this page's resource requests without unregistering the shared Service Worker. */
+  disposeServiceWorker(): void
   readonly tunnel: WorkerTunnel
   /** Bundle transport for the shell's boot seam. */
   loadBundle(url: string): Promise<void>
@@ -182,6 +187,7 @@ export async function connectWorkerHost(worker: Worker, options?: WorkerHostConn
   // subscription keeps that from surfacing as an unhandled rejection.
   void ready.promise.catch(() => {})
   let releaseHttp: (() => void) | undefined
+  let releaseServiceWorker: (() => void) | undefined
   try {
     let httpPort: MessagePort | undefined
     if (options?.httpTransport !== undefined) {
@@ -197,6 +203,9 @@ export async function connectWorkerHost(worker: Worker, options?: WorkerHostConn
       options?.storage,
     )
     const payload = await tunnel.bootPayload()
+    if (options?.serviceWorker !== undefined) {
+      releaseServiceWorker = await connectServiceWorker(options.serviceWorker, (input, init) => tunnel.fetch(input, init))
+    }
     ;(globalThis as ClientTransportGlobal).__DSH_TRANSPORT__ = {
       fetch: (input, init) => tunnel.fetch(input, init),
       openStream: (endpoint, payload, signal, uplink) => tunnel.open(endpoint, payload, signal, uplink),
@@ -218,8 +227,10 @@ export async function connectWorkerHost(worker: Worker, options?: WorkerHostConn
     }
     await applyIndexInjections(payload.injections, src => tunnel.loadBundle(src))
     ready.resolve()
-    return { worker, tunnel, disposeHttp: () => { releaseHttp?.() }, loadBundle: (url: string) => tunnel.loadBundle(url) }
+    return { worker, tunnel, disposeHttp: () => { releaseHttp?.() },
+      disposeServiceWorker: () => { releaseServiceWorker?.() }, loadBundle: (url: string) => tunnel.loadBundle(url) }
   } catch (reason) {
+    releaseServiceWorker?.()
     releaseHttp?.()
     ready.reject(reason)
     throw reason

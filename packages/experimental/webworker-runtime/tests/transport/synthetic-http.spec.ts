@@ -3,6 +3,7 @@ import { expect, it, vi } from 'vitest'
 import { Readable } from '../../src/node/builtin_modules/implemented/stream.ts'
 import { createSyntheticExchange, type ResponseSink } from '../../src/transport/synthetic-http.ts'
 import type { TunnelRequestFrame } from '../../src/transport/frames.ts'
+import type { ServerResponse } from 'node:http'
 
 function fixture(body?: TunnelRequestFrame['body']) {
   const sink = { head: vi.fn(), chunk: vi.fn(), end: vi.fn(), fail: vi.fn() } satisfies ResponseSink
@@ -11,6 +12,39 @@ function fixture(body?: TunnelRequestFrame['body']) {
   const request = exchange.req as InstanceType<typeof Readable>
   return { exchange, request, sink }
 }
+
+it('merges case-insensitive response headers with writeHead taking precedence', () => {
+  const { exchange, sink } = fixture()
+  const response = exchange.res as ServerResponse
+  expect(response.setHeader('X-Kept', 3)).toBe(response)
+  response.setHeader('Content-Type', 'text/plain')
+  response.setHeader('X-Removed', 'gone')
+  expect(response.hasHeader('x-REMOVED')).toBe(true)
+  response.removeHeader('X-removed')
+  expect(response.getHeader('x-removed')).toBeUndefined()
+  response.writeHead(201, { 'content-TYPE': 'application/json' })
+  expect(response.getHeader('CONTENT-TYPE')).toBe('application/json')
+  response.end('{}')
+  expect(sink.end).toHaveBeenCalledWith(expect.objectContaining({ status: 201,
+    headers: { 'x-kept': '3', 'content-type': 'application/json' } }))
+})
+
+it('preserves statusCode assignments and writeHead reads for unary and streamed responses', () => {
+  const first = fixture()
+  const response = first.exchange.res as { statusCode: number; writeHead(status: number): void; end(): void }
+  expect(response.statusCode).toBe(200)
+  response.writeHead(401)
+  expect(response.statusCode).toBe(401)
+  response.statusCode = 403
+  response.end()
+  expect(first.sink.end).toHaveBeenCalledWith(expect.objectContaining({ status: 403 }))
+  const second = fixture()
+  const streaming = second.exchange.res as { statusCode: number; write(body: string): void; end(): void }
+  streaming.statusCode = 418
+  streaming.write('body')
+  streaming.end()
+  expect(second.sink.head).toHaveBeenCalledWith(418, {})
+})
 
 it('supports the published plugin event reader with split UTF-8 and a single body cursor', async () => {
   const bytes = new TextEncoder().encode('{"sessionId":"中文"}')

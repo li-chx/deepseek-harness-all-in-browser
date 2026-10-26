@@ -84,6 +84,8 @@ export interface TunnelPort {
 
 /** What the tunnel gains once the host tree is up. */
 export interface TunnelSeams {
+  /** Fresh authority-bound browser cookie minted inside the owning Worker; never sent to the page. */
+  readonly browserCookie?: () => string
   /**
    * Direct entry to the API fetch handler for privileged methods and any unary
    * call the route lane refused with 401 or 403.
@@ -416,6 +418,7 @@ export class TunnelServer {
     // Foreign origins retain their value so route-level checks can reject them.
     if (headers.get('origin') === url.origin) headers.set('origin', `http://${SYNTHETIC_HOST}`)
     headers.set('host', SYNTHETIC_HOST)
+    if (this.seams?.browserCookie !== undefined) headers.set('cookie', this.seams.browserCookie())
     return {
       frame: { ...frame, url: `${url.pathname}${url.search}`, headers: Object.fromEntries(headers) },
       path: url.pathname,

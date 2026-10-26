@@ -6,6 +6,20 @@ export const HMR_PROFILE = '/dsh/home/profiles/web'
 
 /** @returns Pre-lowered module files and a profile patch for the real Worker boot. */
 export function workerHmrFiles(): Record<string, string> {
+  const bridgeScript = `(() => {
+    const root = document.createElement('div'); root.dataset.workerBridge = '';
+    const image = new Image(); image.onload = () => { root.dataset.image = 'ready'; };
+    image.src = '/worker-bridge/image.svg'; root.append(image);
+    const audio = new Audio('/worker-bridge/audio.wav'); audio.preload = 'auto';
+    audio.onloadedmetadata = () => { root.dataset.audio = 'ready'; }; root.append(audio);
+    fetch('/worker-bridge/value.json').then(response => response.json()).then(value => { root.dataset.host = String(value.host); });
+    document.body.append(root);
+  })();`
+  const wav = Buffer.alloc(46)
+  wav.write('RIFF', 0); wav.writeUInt32LE(38, 4); wav.write('WAVEfmt ', 8)
+  wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22)
+  wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28); wav.writeUInt16LE(2, 32)
+  wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(2, 40)
   const greeting = /\n(exports.name = 'local-greeting';[\s\S]*?\n};)\n/.exec(workerAuthoringPrompt('/dsh', 'web'))?.[1]
   if (greeting === undefined) throw new Error('Worker guidance has no executable greeting example')
   const plugin = (id: string): string => `
@@ -34,7 +48,7 @@ exports.apply = ctx => ctx.effect(() => ctx.hmrProbe.register('unrelated', 'stab
     'home/profiles/web/plugins/controller.js': `
 const fs = require('node:fs');
 const { LlmAdapter, createUserMessage } = require('@deepseek-ai/dsh-llm');
-exports.inject = ['webServer', 'hmr', 'systemPrompt', 'llm', 'agents', 'agentPresets'];
+exports.inject = ['webServer', 'connection', 'hmr', 'systemPrompt', 'llm', 'agents', 'agentPresets'];
 exports.apply = ctx => {
   const rows = {};
   const events = [];
@@ -63,6 +77,33 @@ exports.apply = ctx => {
   });
   const reply = (res, value) => { res.writeHead(200, {'content-type':'application/json'}); res.end(JSON.stringify(value)); };
   const route = (path, handler) => ctx.effect(() => ctx.webServer.register({ kind: 'exact', path, handler }));
+  ctx.on('webserver/index-inject', table => table.push({ kind: 'script', placement: 'body', text:
+    'const script = document.createElement("script"); script.src = "/worker-bridge/widget.js"; document.body.append(script);' }));
+  const admitted = (req, res) => {
+    const rejection = ctx.connection.requestRejection(req);
+    if (rejection === undefined) return true;
+    res.statusCode = rejection; res.end(); return false;
+  };
+  route('/worker-bridge/widget.js', (req, res) => {
+    if (!admitted(req, res)) return;
+    res.writeHead(200, { 'content-type': 'application/javascript' }); res.end(${JSON.stringify(bridgeScript)});
+  });
+  route('/worker-bridge/image.svg', (req, res) => {
+    if (!admitted(req, res)) return;
+    res.writeHead(200, { 'content-type': 'image/svg+xml' });
+    res.end('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1"/></svg>');
+  });
+  route('/worker-bridge/audio.wav', (req, res) => {
+    if (!admitted(req, res)) return;
+    res.writeHead(200, { 'content-type': 'audio/wav' }); res.end(require('node:buffer').Buffer.from('${wav.toString('base64')}', 'base64'));
+  });
+  route('/worker-bridge/value.json', (req, res) => { if (admitted(req, res)) reply(res, { host: boot }); });
+  route('/worker-bridge/refused', (_req, res) => { res.statusCode = 403; res.end('denied by plugin'); });
+  route('/worker-bridge/echo', async (req, res) => {
+    if (!admitted(req, res)) return;
+    let text = ''; for await (const chunk of req) text += String(chunk);
+    reply(res, { method: req.method, text });
+  });
   route('/hmr-probe/authoring-status', async (_req, res) => {
     const assembly = await ctx.systemPrompt.assemble();
     reply(res, { greeting: assembly.sections.find(section => section.name === 'local:greeting')?.text });

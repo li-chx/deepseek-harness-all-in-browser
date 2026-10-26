@@ -55,7 +55,7 @@ export interface SyntheticExchange {
 export function createSyntheticExchange(frame: TunnelRequestFrame, sink: ResponseSink): SyntheticExchange {
   const listeners = new Map<string, Set<() => void>>()
   let status = 200
-  let headers: Record<string, string> = {}
+  const headers: Record<string, string> = {}
   let streaming = false
   let finished = false
   let aborted = false
@@ -112,10 +112,16 @@ export function createSyntheticExchange(frame: TunnelRequestFrame, sink: Respons
   })
 
   const res: Record<string, unknown> = {
+    setHeader: (name: string, value: string | number): unknown => {
+      headers[name.toLowerCase()] = String(value)
+      return res
+    },
+    getHeader: (name: string): string | undefined => headers[name.toLowerCase()],
+    hasHeader: (name: string): boolean => Object.hasOwn(headers, name.toLowerCase()),
+    removeHeader: (name: string): void => { Reflect.deleteProperty(headers, name.toLowerCase()) },
     writeHead: (nextStatus: number, nextHeaders?: Record<string, string | number>): unknown => {
       status = nextStatus
       if (nextHeaders !== undefined) {
-        headers = {}
         for (const [key, value] of Object.entries(nextHeaders)) headers[key.toLowerCase()] = String(value)
       }
       return res
@@ -162,6 +168,7 @@ export function createSyntheticExchange(frame: TunnelRequestFrame, sink: Respons
     },
   }
   res.once = res.on
+  Object.defineProperty(res, 'statusCode', { get: () => status, set: (value: number) => { status = value } })
   Object.defineProperty(res, 'headersSent', { get: () => streaming })
   Object.defineProperty(res, 'writableEnded', { get: () => finished })
 

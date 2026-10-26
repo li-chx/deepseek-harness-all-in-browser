@@ -134,9 +134,10 @@ export class PortHttpTransport implements HttpTransport {
 /** Serve HTTP from the page (for example through native RPC); function values never cross threads.
  * @param port Dedicated port transferred alongside Worker init.
  * @param transport Provider honoring request cancellation through response body consumption.
+ * @param onClose Optional notification after the owned port closes.
  * @returns Disposer aborting outstanding requests and closing the port.
  */
-export function serveHttpTransport(port: MessagePort, transport: HttpTransport): () => void {
+export function serveHttpTransport(port: MessagePort, transport: HttpTransport, onClose?: () => void): () => void {
   const http = new WorkerHttpTransport(transport)
   const controllers = new Map<number, AbortController>()
   let closed = false
@@ -149,6 +150,7 @@ export function serveHttpTransport(port: MessagePort, transport: HttpTransport):
     controllers.clear()
     port.removeEventListener('message', receive)
     port.close()
+    onClose?.()
   }
   const run = async (id: number, value: Fields): Promise<void> => {
     const controller = new AbortController()

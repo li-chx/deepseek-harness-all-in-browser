@@ -21,7 +21,11 @@ const { mountPreviewStorage, previewStorageOptions } = await import('./preview-s
 const storage = previewStorageOptions(new URL(location.href), new URL(image, document.baseURI), source.overlays)
 const storageUi = storage === undefined ? undefined : mountPreviewStorage()
 try {
-  const connection = await connectWorkerHost(new DshWorker({ name: 'dsh-host' }), { image, overlays: source.overlays, ...storage === undefined ? {} : { storage } })
+  const connection = await connectWorkerHost(new DshWorker({ name: 'dsh-host' }), {
+    image, overlays: source.overlays, serviceWorker: './preview-service-worker.js',
+    ...storage === undefined ? {} : { storage },
+  })
+  window.addEventListener('pagehide', () => { connection.disposeServiceWorker(); connection.disposeHttp() }, { once: true })
   transportReady.resolve((input, init) => connection.tunnel.fetch(input, init))
   storageUi?.connect(connection)
 } catch (error) {

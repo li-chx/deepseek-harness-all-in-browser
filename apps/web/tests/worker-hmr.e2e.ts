@@ -46,8 +46,10 @@ it('replaces shared Host code, removes and adds an entry, and recovers from a fa
     }))],
   ])
   const dist = resolve('apps/web/dist')
+  const staticRequests: string[] = []
   const server = createServer((req, res) => {
     const path = new URL(req.url ?? '/', 'http://localhost').pathname
+    staticRequests.push(path)
     const filename = resolve(dist, '.' + path)
     const mime: Record<string, string> = {
       '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
@@ -75,19 +77,42 @@ it('replaces shared Host code, removes and adds an entry, and recovers from a fa
       headless: true,
       ...(process.env['DSH_HMR_CHROME'] === '1' ? { channel: 'chrome' } : {}),
     })
-    const page = await browser.newPage({ locale: 'en-US' })
+    const context = await browser.newContext({ locale: 'en-US' })
+    const page = await context.newPage()
     const logs: string[] = []
-    page.on('console', (message) => { logs.push(message.text()) })
+    page.on('response', (response) => {
+      if (new URL(response.url()).pathname.startsWith('/worker-bridge/')) logs.push(`${response.status()} ${response.url()}`)
+    })
+    page.on('requestfailed', (request) => {
+      if (new URL(request.url()).pathname.startsWith('/worker-bridge/')) logs.push(`${request.url()}: ${request.failure()?.errorText ?? 'request failed'}`)
+    })
+    page.on('console', (message) => { logs.push(message.text().replace(/([?&]token=)[^\s"'&]+/g, '$1[redacted]')) })
     page.on('pageerror', (error) => { logs.push(error.message) })
     let workers = 0
     page.on('worker', () => { workers++ })
     try {
-      await page.goto(`http://127.0.0.1:${String(address.port)}/preview.html`)
+      await page.goto(`http://localhost:${String(address.port)}/preview.html`)
       await page.getByRole('button', { name: 'Start Preview' }).click()
       await expect.poll(async () => {
         try { return (await probe(page)).rows } catch { return undefined }
       }, { timeout: 120_000 }).toEqual({ a: 'v1', b: 'v1', unrelated: 'stable' })
       const initial = await probe(page)
+      const bridge = page.locator('[data-worker-bridge]')
+      await expect.poll(() => bridge.getAttribute('data-image'), { timeout: 15_000 }).toBe('ready')
+      await expect.poll(() => bridge.getAttribute('data-audio'), { timeout: 15_000 }).toBe('ready')
+      await expect.poll(() => bridge.getAttribute('data-host'), { timeout: 15_000 }).toBe(String(initial.boot))
+      const bridgeResult = await page.evaluate(async () => {
+        const response = await fetch('/worker-bridge/echo?kept=1', { method: 'POST', body: '中文 payload' })
+        const denied = await fetch('/worker-bridge/refused')
+        const echo: unknown = await response.json()
+        return { echo, denied: { status: denied.status, text: await denied.text() },
+          secure: isSecureContext, controlled: navigator.serviceWorker.controller !== null }
+      })
+      expect(bridgeResult).toEqual({ echo: { method: 'POST', text: '中文 payload' },
+        denied: { status: 403, text: 'denied by plugin' }, secure: true, controlled: true })
+      expect(staticRequests.filter(path => path.startsWith('/worker-bridge/'))).toEqual([])
+      await compareOrRefreshGolden(resolve('apps/web/tests/expected/worker-hmr/resource-bridge.expected.md'),
+        JSON.stringify({ ...bridgeResult, scriptLoaded: true, imageLoaded: true, audioLoaded: true }, null, 2), webSnapshotMode())
       const origin = await page.evaluate(() => performance.timeOrigin)
       await probe(page, 'v2')
       await expect.poll(async () => (await probe(page)).rows, { timeout: 15_000 })
@@ -138,6 +163,30 @@ it('replaces shared Host code, removes and adds an entry, and recovers from a fa
       await compareOrRefreshGolden(resolve('apps/web/tests/expected/worker-hmr/lifecycle.expected.md'),
         JSON.stringify({ rows: final.rows, events: counts, workerStarts: workers, documentPreserved: true }, null, 2),
         webSnapshotMode())
+      const second = await context.newPage()
+      second.on('console', (message) => { logs.push(message.text().replace(/([?&]token=)[^\s"'&]+/g, '$1[redacted]')) })
+      second.on('pageerror', (error) => { logs.push(error.message) })
+      const deploymentScript = '/assets/preview-deployment.js'
+      assets.set(deploymentScript, new TextEncoder().encode('document.documentElement.dataset.deployment = "current"'))
+      const catalog: unknown = JSON.parse(await readFile(resolve(dist, 'preview/static-assets.json'), 'utf8'))
+      if (!Array.isArray(catalog) || !catalog.every((path): path is string => typeof path === 'string')) {
+        throw new Error('Static asset catalog must contain file paths')
+      }
+      assets.set('/preview/static-assets.json', new TextEncoder().encode(JSON.stringify([...catalog, deploymentScript.slice(1)])))
+      const html = await readFile(resolve(dist, 'preview.html'), 'utf8')
+      assets.set('/preview.html', new TextEncoder().encode(html.replace('</head>',
+        `<script defer src="${deploymentScript}"></script></head>`)))
+      await second.goto(`http://localhost:${String(address.port)}/preview.html?preview-fixture=hmr`)
+      expect(await second.locator('html').getAttribute('data-deployment')).toBe('current')
+      const other = second.locator('[data-worker-bridge]')
+      await expect.poll(() => other.getAttribute('data-host'), { timeout: 120_000 }).not.toBeNull()
+      expect(await other.getAttribute('data-host')).not.toBe(String(initial.boot))
+      await page.close()
+      const remaining = await second.evaluate(async () => {
+        const value: unknown = await (await fetch('/worker-bridge/value.json')).json()
+        return value
+      })
+      expect(remaining).toEqual({ host: Number(await other.getAttribute('data-host')) })
     } catch (error) {
       console.error(logs.join('\n'))
       throw error

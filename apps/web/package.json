@@ -19,6 +19,7 @@
     "dist",
     "!dist/**/*.map",
     "!dist/preview.html",
+    "!dist/preview-service-worker.js",
     "!dist/preview"
   ],
   "scripts": {

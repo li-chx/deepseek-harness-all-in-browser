@@ -1,5 +1,5 @@
-import { readFile, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { readFile, writeFile, readdir } from 'node:fs/promises'
+import { resolve, relative, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import type { Plugin } from 'vite'
@@ -66,22 +66,28 @@ function emitPreviewPage(): Plugin {
   let write = true
   let written = false
   let outputDirectory = ''
+  let publicDirectory = ''
   return {
     name: 'dsh-emit-preview-page',
     configResolved(config) {
       write = config.build.write
       outputDirectory = resolve(config.root, config.build.outDir)
+      publicDirectory = config.publicDir
     },
     buildStart() {
       bootstrapFile = undefined
       written = false
     },
-    generateBundle(_options, bundle) {
+    async generateBundle(_options, bundle) {
       if (!write) return
       for (const item of Object.values(bundle)) {
         if (item.type === 'chunk' && item.isEntry && item.name === 'bootstrap') bootstrapFile = item.fileName
       }
       if (bootstrapFile === undefined) throw new Error('vite: preview bootstrap entry missing from the bundle')
+      const publicFiles = publicDirectory === '' ? [] : (await readdir(publicDirectory, { recursive: true, withFileTypes: true }))
+        .filter(entry => entry.isFile()).map(entry => relative(publicDirectory, join(entry.parentPath, entry.name)).replaceAll('\\', '/'))
+      this.emitFile({ type: 'asset', fileName: 'preview/static-assets.json',
+        source: JSON.stringify([...Object.keys(bundle), ...publicFiles, 'preview.html', 'preview/static-assets.json'].sort()) })
     },
     writeBundle() { written = true },
     async closeBundle() {
@@ -186,12 +192,14 @@ export default defineConfig({
         // module tag of one page into a single synthetic entry, and only a
         // separate input keeps the shared page chunks bootstrap-free.
         bootstrap: src('./src/preview.ts'),
+        'preview-service-worker': src('./src/preview-service-worker.ts'),
       },
       output: {
         // The worker-preview surface groups under dist/preview/ (the page
         // itself stays at dist/preview.html), so the published payload can
         // exclude it as one directory.
         entryFileNames(chunk): string {
+          if (chunk.name === 'preview-service-worker') return 'preview-service-worker.js'
           return chunk.name === 'bootstrap' ? 'preview/[name]-[hash].js' : 'assets/[name]-[hash].js'
         },
         // Output layout: the two main chunks stay at assets/ root; lazy

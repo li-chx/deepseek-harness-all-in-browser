@@ -29,7 +29,7 @@ function connection(): { value: WorkerHostConnection; status(status: VfsPersiste
     postMessage: vi.fn(), terminate: vi.fn(), onmessage: null, onmessageerror: null, onerror: null,
   })
   const tunnel = new WorkerTunnel(worker)
-  return { worker, value: { worker, tunnel, disposeHttp() {}, loadBundle: async () => {} },
+  return { worker, value: { worker, tunnel, disposeHttp() {}, disposeServiceWorker() {}, loadBundle: async () => {} },
     status: (status) => { worker.dispatchEvent(new MessageEvent('message', { data: { t: 'storage-status', status } })) },
   }
 }

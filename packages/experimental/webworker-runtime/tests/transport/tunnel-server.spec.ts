@@ -85,11 +85,13 @@ describe('worker tunnel request origin', () => {
         res.end('origin checked')
       }),
     })
-    server.serve(seams(async () => (async function *(): AsyncGenerator { yield undefined })()))
+    server.serve({ ...seams(async () => (async function *(): AsyncGenerator { yield undefined })()),
+      browserCookie: () => 'session=worker-owned',
+    })
     server.handleMessage({ t: 'req', id: 81, method: 'POST', url: 'https://preview.example/dsh-plugin-hub/probe?test=1',
-      headers: { origin, 'x-probe': 'kept' }, body: new TextEncoder().encode('{}').buffer })
+      headers: { origin, 'x-probe': 'kept', cookie: 'untrusted=page' }, body: new TextEncoder().encode('{}').buffer })
     expect(await received.promise).toEqual({ url: '/dsh-plugin-hub/probe?test=1',
-      headers: { origin: mapped, host: SYNTHETIC_HOST, 'x-probe': 'kept' }, body: '{}' })
+      headers: { origin: mapped, host: SYNTHETIC_HOST, 'x-probe': 'kept', cookie: 'session=worker-owned' }, body: '{}' })
     await vi.waitFor(() => { expect(frames).toHaveLength(1) })
     expect(frames[0]).toMatchObject({ t: 'res', status })
   })

@@ -51,6 +51,7 @@ import { createChildProcessFacade } from './node/builtin_modules/implemented/chi
 import { WorkerHttpTransport, type HttpTransport, type HttpFetch } from './transport/http-transport.ts'
 import { createHttpsModule } from './node/builtin_modules/implemented/https.ts'
 import { createCurlExecutable } from './shell/process/curl.ts'
+import { workerBrowserCookie } from './transport/browser-cookie.ts'
 import type Hmr from '@deepseek-ai/dsh-hmr'
 
 export { DEFAULT_ROOT } from './image-layout.ts'
@@ -352,6 +353,7 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       localRoutes.set('/__storage/status', storageFetch)
       localRoutes.set('/__storage/flush', storageFetch)
       tunnel.serve({
+        browserCookie: () => workerBrowserCookie(connection),
         localRoutes,
         directFetch: (request: Request) => handler.fetch(request, peer),
         bootPayload: () => readBootPayload(ctx),
