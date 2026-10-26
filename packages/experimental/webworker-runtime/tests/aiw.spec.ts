@@ -1,7 +1,7 @@
 /** Workbench actions use real VFS notifications, installer plans, retained bytes and guarded shell filesystem access. */
 import { createHash } from 'node:crypto'
 import { Buffer } from 'buffer'
-import { expect, it, type TestContext } from 'vitest'
+import { expect, it, onTestFinished, type TestContext } from 'vitest'
 import { createForgeHost } from '../src/forge/host.ts'
 import { readForgeCatalog } from '../src/forge/catalog.ts'
 import { FORGE_GENERATION, object, type ForgeManifest } from '../src/forge/protocol.ts'
@@ -19,7 +19,7 @@ function plan(version: string, id = 'sample', entry = 'index.ts'): { manifest: F
     packages: [{ id: hash, name: id, version: '1.0.0', entry, dependencies: {}, hostDependencies: [],
       files: [{ path: entry, sha256: hash, size: Buffer.byteLength(bytes), objectKey: `${FORGE_GENERATION}/objects/${hash}` }] }] } }
 }
-function fixture(test: TestContext, vfs = new MemoryVfs(), restore = false) {
+function fixture(test: Pick<TestContext, 'onTestFinished'>, vfs = new MemoryVfs(), restore = false) {
   if (!restore) {
     vfs.seed('/dsh/home/profiles/web/cordis.patch.yml', '[]\n')
     vfs.seed('/dsh/workspace/note.txt', 'first')
@@ -234,4 +234,55 @@ it('Unicode and space-containing filenames round-trip through file backup import
   const archive = files.export('/dsh/workspace/source')
   expect(files.import(archive, '/dsh/workspace/导入 副本').writes).toBe(1)
   expect(vfs.readFileSync('/dsh/workspace/导入 副本/中文 文件.md', 'utf8')).toBe('正文')
+})
+
+it('multi-megabyte binary files round-trip through file and plugin archives', async (test) => {
+  const f = fixture(test), bytes = Buffer.alloc(4 * 1024 * 1024, 1)
+  const hash = createHash('sha256').update(bytes).digest('hex')
+  f.vfs.seed('/dsh/workspace/large/binary.bin', bytes)
+  const exported = await f.action({ action: 'export', path: '/dsh/workspace/large' })
+  expect((await f.action({ action: 'import', archive: exported.value.archive, directory: '/dsh/workspace/restored-large' })).status).toBe(200)
+  expect(createHash('sha256').update(f.vfs.readFileSync('/dsh/workspace/restored-large/binary.bin') as Uint8Array).digest('hex')).toBe(hash)
+  const built = plan('large')
+  built.manifest.packages[0]!.files.push({ path: 'binary.bin', sha256: hash, size: bytes.length, objectKey: `${FORGE_GENERATION}/objects/${hash}` })
+  const response = await f.action({ action: 'plugin-import', archive: {
+    schema: 1, generation: FORGE_GENERATION, kind: 'plugin', manifest: built.manifest,
+    objects: { [hash]: bytes.toString('base64'), [digest(built.bytes)]: Buffer.from(built.bytes).toString('base64') },
+  } })
+  expect(response.status).toBe(200)
+  expect(response.value.status).toBe('active')
+  const pluginArchive = (await f.action({ action: 'plugin-export', pluginId: 'sample' })).value.archive
+  const other = fixture(test)
+  expect((await other.action({ action: 'plugin-import', archive: pluginArchive })).status).toBe(200)
+  expect(createHash('sha256').update(other.vfs.readFileSync(`/dsh/home/profiles/web/plugins/.forge/packages/${built.manifest.plugin.packageId}/binary.bin`) as Uint8Array).digest('hex')).toBe(hash)
+})
+
+it.each(['index.ts/helper.ts', 'forge.json/helper.ts'])('rejects conflicting source path %s before retaining or installing an imported plugin', async (conflict) => {
+  const f = fixture({ onTestFinished }), built = plan('imported')
+  const source = { directory: '/original', files: {
+    'forge.json': JSON.stringify({ id: 'sample', name: 'sample', version: '1.0.0', entry: 'index.ts', files: ['index.ts', conflict] }),
+    'index.ts': 'export const apply = () => {}', [conflict]: 'export const value = 1',
+  } }
+  const response = await f.action({ action: 'plugin-import', archive: {
+    schema: 1, generation: FORGE_GENERATION, kind: 'plugin', manifest: built.manifest, source,
+    objects: { [digest(built.bytes)]: Buffer.from(built.bytes).toString('base64') },
+  } })
+  expect(response).toMatchObject({ status: 400, value: { error: { code: 'invalid-source' } } })
+  expect(f.host.installer.installed().plugins).toEqual([])
+  expect(f.vfs.existsSync('/dsh/home/.aiw')).toBe(false)
+  expect(f.vfs.readdirSync('/dsh/workspace')).toEqual(['note.txt'])
+  expect(f.vfs.readFileSync('/dsh/home/profiles/web/cordis.patch.yml', 'utf8')).toBe('[]\n')
+})
+
+it.each(['A', 'AA=', 'AA=A', 'A===', 'AAAA=', 'AAA\n', 'AA-_', '===='])('rejects malformed archive base64 %j before writing', async (base64) => {
+  const f = fixture({ onTestFinished }), built = plan('invalid')
+  const decoded = Buffer.from(base64, 'base64'), hash = createHash('sha256').update(decoded).digest('hex')
+  const file = built.manifest.packages[0]!.files[0]!
+  file.sha256 = hash; file.size = decoded.length; file.objectKey = `${FORGE_GENERATION}/objects/${hash}`
+  expect((await f.action({ action: 'import', archive: { schema: 1, generation: FORGE_GENERATION, kind: 'files', directories: [],
+    files: [{ path: 'invalid.bin', base64, sha256: hash }] }, directory: '/dsh/workspace/invalid-base64' })).value).toMatchObject({ error: { code: 'invalid-archive' } })
+  expect((await f.action({ action: 'plugin-import', archive: { schema: 1, generation: FORGE_GENERATION, kind: 'plugin', manifest: built.manifest,
+    objects: { [hash]: base64 } } })).value).toMatchObject({ error: { code: 'invalid-archive' } })
+  expect(f.vfs.existsSync('/dsh/workspace/invalid-base64')).toBe(false)
+  expect(f.host.installer.installed().plugins).toEqual([])
 })

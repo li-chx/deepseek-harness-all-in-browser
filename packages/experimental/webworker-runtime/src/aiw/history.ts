@@ -152,7 +152,7 @@ export class AiwHistory {
     let total = 0
     for (const pkg of manifest.packages) for (const file of pkg.files) {
       const value = encoded[file.sha256]
-      if (typeof value !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) throw new ForgeError('invalid-archive', 'Plugin backup contains invalid base64')
+      if (typeof value !== 'string' || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}(?![\s\S])/.test(value)) throw new ForgeError('invalid-archive', 'Plugin backup contains invalid base64')
       const bytes = new Uint8Array(Buffer.from(value, 'base64'))
       if (bytes.byteLength !== file.size || aiwDigest(bytes) !== file.sha256) throw new ForgeError('invalid-archive', 'Plugin backup artifact verification failed')
       if (!artifacts.has(file.sha256)) total += bytes.byteLength
@@ -173,6 +173,15 @@ export class AiwHistory {
     const files = Object.entries(source.files)
     if (files.length > 1001 || files.reduce((sum, [, text]) => sum + new TextEncoder().encode(text).byteLength, 0) > 32 * 1024 * 1024) {
       throw new ForgeError('archive-limit', 'Plugin source backup exceeds 1001 files or 32 MiB')
+    }
+    const paths = new Set(files.map(([path]) => path))
+    for (const path of paths) {
+      const segments = path.split('/')
+      segments.pop()
+      while (segments.length) {
+        if (paths.has(segments.join('/'))) throw new ForgeError('invalid-source', 'Plugin source contains conflicting file and directory paths')
+        segments.pop()
+      }
     }
     const descriptorText = source.files['forge.json']
     let parsed: unknown

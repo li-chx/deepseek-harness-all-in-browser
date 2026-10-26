@@ -141,7 +141,7 @@ export class AiwFiles {
       this.path(`${directory}/${path}`, true)
       if (seen.has(path)) throw new ForgeError('invalid-archive', 'File backup contains duplicate paths')
       seen.add(path)
-      if (typeof entry.base64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(entry.base64)) throw new ForgeError('invalid-archive', 'File backup contains invalid base64')
+      if (typeof entry.base64 !== 'string' || entry.base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}(?![\s\S])/.test(entry.base64)) throw new ForgeError('invalid-archive', 'File backup contains invalid base64')
       const bytes = new Uint8Array(Buffer.from(entry.base64, 'base64'))
       if (aiwDigest(bytes) !== entry.sha256) throw new ForgeError('invalid-archive', 'File backup hash verification failed')
       total += bytes.byteLength
