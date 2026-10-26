@@ -71,12 +71,16 @@ describe('platform home patch', () => {
     const patch = platformHomePatch(repoRoot, 'web', '/virtual')
     expect(patch).toContainEqual({ id: 'hmr', config: { root: ['/virtual/home/profiles/web/plugins'] } })
     expect(patch).toContainEqual({ id: 'harness-dev-context', disabled: true })
+    expect(patch).toContainEqual({ id: 'tool-fs-search', disabled: true })
     expect(patch.find(row => row.id === 'system-prompt')?.config)
       .toHaveProperty('personaPrefix', workerAuthoringPrompt('/virtual', 'web'))
     for (const id of ['preset-standard', 'preset-ptc', 'preset-cordis']) {
       const config: unknown = patch.find(row => row.id === id)?.config
       expect(JSON.stringify(config)).toContain(JSON.stringify(workerAuthoringPrompt('/virtual', 'web')).slice(1, -1))
       expect(JSON.stringify(config)).toContain('You are a coding agent powered by the {{model}} model.')
+      expect(config).toHaveProperty('plugins', expect.arrayContaining([
+        expect.objectContaining({ id: 'tool-fs-search', disabled: true }),
+      ]))
     }
     expect(patch.some(row => row.id === 'preset-minimal')).toBe(false)
   })

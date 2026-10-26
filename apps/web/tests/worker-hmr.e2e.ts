@@ -111,10 +111,14 @@ it('replaces shared Host code, removes and adds an entry, and recovers from a fa
         const greeting = `When the user sends exactly WORKER_HELLO, reply exactly: Hello from plugin ${version}.`
         await expect.poll(async () => (await probe<{ greeting?: string }>(page, 'authoring-status')).greeting,
           { timeout: 15_000 }).toBe(greeting)
-        const request = await probe<{ system: string; logged: string[] }>(page, 'authoring-request')
+        const request = await probe<{ system: string; logged: string[]; tools: string[] }>(page, 'authoring-request')
         expect(request.system).toContain(guidance)
         expect(request.system).toContain(greeting)
         expect(request.system).not.toContain('pnpm run dev:web')
+        expect(request.system).not.toContain('Use the grep tool — not shell grep or rg')
+        expect(request.tools).toEqual(expect.arrayContaining(['read', 'write', 'bash']))
+        expect(request.tools).not.toContain('grep')
+        expect(request.tools).not.toContain('glob')
         expect(request.logged).toContain(request.system)
         greetings.push(greeting)
       }

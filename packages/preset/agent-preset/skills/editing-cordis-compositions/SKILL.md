@@ -81,4 +81,4 @@ A preset plugin that supplies a service must isolate the provider and all its co
 
 ## Extend the Host
 
-For new plugin code or profile-wide capabilities, load `cordis-plugin-development`, author a workspace bundle, and install it with `plugin_manager`. Inspect available APIs through `cordis_inspect_list` and `cordis_inspect_query`, including a mounted plugin's Config schema through the Host `Config` provider; those tools do not invoke Remote methods. Verify the installed capability before reporting completion.
+For new plugin code or profile-wide capabilities, load `cordis-plugin-development`. On Node, author a workspace bundle and install it with `plugin_manager`; in the browser Worker, follow the system prompt's Host-only Forge source workflow instead. Inspect available APIs through `cordis_inspect_list` and `cordis_inspect_query`, including a mounted plugin's Config schema through the Host `Config` provider; those tools do not invoke Remote methods. Verify the installed capability before reporting completion.

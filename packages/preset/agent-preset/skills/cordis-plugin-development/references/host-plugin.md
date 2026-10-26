@@ -1,5 +1,7 @@
 # Bundles and Host plugins
 
+The manifest and display-resource instructions below describe Node bundle authoring. In the browser Worker, follow the system prompt's `forge.json` source workflow instead; its generated root `package.json` cannot declare custom display exports. Report the resulting package-name/default-icon display as a deployment limitation, rather than trying to bypass the descriptor validation.
+
 A bundle is a package whose `package.json` declares `dsh.bundle.patch`; the YAML patch inserts plugin entries. Give the package and rows unique names; use the Loader's existing YAML syntax, including `!!js` where expressions are needed. Read an existing patch before editing it: a matching override replaces the complete `config`.
 
 ## Manifest
@@ -68,3 +70,9 @@ Register every resource inside `apply` with `ctx.effect` or `ctx.on` and return 
 `plugin_manager` `install_bundle` performs package installation and bundle selection; do not reproduce those steps with shell commands. Only pass `approvedBuilds` after the user explicitly approves the reported pending build scripts. Preserve returned failures and pending states; report success only after observing the requested capability.
 
 `list_plugins` and `list_bundles` return exact identifiers for existing installations. `set_plugin` and `set_bundle` toggle them; `remove_bundle` removes a bundle. Inspect saved-state and activation outcomes separately: `failed` requires diagnosis, `overridden` means a higher-priority layer wins, and `restart-required` means the change is not live. Installing a new bundle can activate through HMR; replacing an installed package requires restart to load a fresh JavaScript module generation. Do not infer updated browser code from an unchanged slot id.
+
+## Node profile and template access
+
+`DSH_PROFILE` (profile name) and `DSH_PROFILE_DIR` (its directory, whose `node_modules` holds only profile-installed bundles) are set in every shell call of a profile-launched Harness and absent when the Harness was booted without a profile. Bash reads them as `$DSH_PROFILE`; PowerShell, which the Windows preset uses, reads them as `$env:DSH_PROFILE`. With `dsh` on the PATH, `dsh --profile "$DSH_PROFILE" --dump-config` prints the composed profile.
+
+In Desktop the skill directory sits inside `app.asar`, which only the Host process’s own file reads can open; shell commands (`ls`, `cat`, `cp`, `cmp`), glob and native search tools, `node`, and pnpm fail on it. In every deployment, including a source checkout, read template files with the file-read tool, write copies into the workspace with file-write, and verify by reading back. Never install or syntax-check a template in place.

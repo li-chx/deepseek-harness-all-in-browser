@@ -117,7 +117,7 @@ export function profileRoster(repoRoot: string, profile: string): ProfileRoster 
 
 /**
  * The image home patch applies Worker platform fields, deployment guidance and the local plugin watch,
- * and disables Node checkout guidance. Each config retains fields composed from the profile bundles.
+ * and disables Node checkout guidance and native search tools. Each config retains fields composed from the profile bundles.
  * @param repoRoot - Absolute repository root.
  * @param profile - Shipped profile template name.
  * @param root - Mounted virtual filesystem root.
@@ -146,6 +146,7 @@ export function platformHomePatch(repoRoot: string, profile: string, root = DEFA
     const pluginRows = config.plugins.map((value: unknown) => asConfig(value, id))
     if (!pluginRows.some(plugin => plugin.id === 'persona')) throw new Error(`vfs image: ${id} has no persona row`)
     const plugins = pluginRows.map((plugin) => {
+      if (plugin.id === 'tool-fs-search') return { ...plugin, disabled: true }
       if (plugin.id !== 'persona') return plugin
       const persona = asConfig(plugin.config, `${id}/persona`)
       if (typeof persona.prefix !== 'string') throw new Error(`vfs image: ${id}/persona has no text prefix`)
@@ -154,6 +155,7 @@ export function platformHomePatch(repoRoot: string, profile: string, root = DEFA
     patches.push({ id, config: { ...config, plugins } })
   }
   if (findRow(composed, 'harness-dev-context') !== undefined) patches.push({ id: 'harness-dev-context', disabled: true })
+  if (findRow(composed, 'tool-fs-search') !== undefined) patches.push({ id: 'tool-fs-search', disabled: true })
   return patches
 }
 

@@ -5,9 +5,11 @@ description: Use when designing, reviewing, adding, enabling, disabling, install
 
 # Persistent Harness plugins
 
-For implementation, use ordinary workspace files to author a bundle, then `plugin_manager` with `action: install_bundle` and the absolute package directory as `target` to install it in the current profile. Changes affect every session in that profile and survive restart. Load `editing-cordis-compositions` for agent preset changes.
+In the browser Worker, follow the system prompt's Host-only Forge workflow, not the Node workflow below. Do not try `install_bundle` or Client/display-resource templates. Published npm Client support does not enable local Client authoring. Report UI limitations before partial Host work; use the inline Host example because JavaScript template files may be absent.
 
-Do not write the profile's `package.json` or `cordis.patch.yml`, create packages under `$DSH_HOME`, or run pnpm in the profile directory: `install_bundle` performs those steps, and each hand-made write outside the workspace needs its own approval. Every `plugin_manager` action, including `list_plugins` and `list_bundles`, also needs approval without Full access, so call it only when its result decides the next step.
+The following installation workflow applies to Node deployments. Use ordinary workspace files to author a bundle, then `plugin_manager` with `action: install_bundle` and the absolute package directory as `target` to install it in the current profile. Changes affect every session in that profile and survive restart. Load `editing-cordis-compositions` for agent preset changes.
+
+Do not write the profile's `package.json` or `cordis.patch.yml`, create packages under `$DSH_HOME`, or run pnpm in the profile directory: `install_bundle` performs those steps. Follow the active permission policy for tool calls and writes outside the workspace; do not assume a read-only listing and an installation have the same approval requirements. Call `plugin_manager` only when its result decides the next step.
 
 ## Design or review
 
@@ -27,15 +29,15 @@ A shipped bundle can resolve a plugin row and leave it `disabled`. The row id an
 
 ## Knowledge sources, in order
 
-1. Inspection: `cordis_inspect_query` answers exact Service methods and Event modes (`Service`, `Event`), a mounted plugin's Config JSON Schema (`Config.listConfigs`: filter the paged directory by `name`, then query the `entry` id), the Tools this Agent can call (`Tool`), and live Client Slots and theme tokens (`Slots`, `Theme`).
+1. Inspection: `cordis_inspect_query` answers exact Service methods and Event modes (`Service`, `Event`), a mounted plugin's Config JSON Schema (`Config.listConfigs`: filter the paged directory by `name`, then query the `entry` id), the Tools this Agent can call (`Tool`), and live Client Slots and theme tokens (`Slots`, `Theme`). Config status `absent` means no Config schema, not inactive code; verify activation with the installation report and actual behavior.
 2. Package documentation: `Config.listConfigs` with `name` set to the package finds its entries; querying one `entry` returns its `packageDir`, the resolved package directory. Read `<packageDir>/README.md`. Bundled packages resolve from the dsh installation and profile-installed bundles from the profile, so never guess the path from `$DSH_PROFILE_DIR`.
 3. Source: installed packages ship built `lib/index.js` and `lib/types/**/*.d.ts` with JSDoc under that same `packageDir`, not `src/`; a source checkout of DSH has `packages/<group>/<name>/src`. Read them when inspection and the README leave a question open, and start source-level diagnosis from a concrete installation or runtime failure.
 
-`DSH_PROFILE` (profile name) and `DSH_PROFILE_DIR` (its directory, whose `node_modules` holds only profile-installed bundles) are set in every shell call of a profile-launched Harness and absent when the Harness was booted without a profile. Bash reads them as `$DSH_PROFILE`; PowerShell, which the Windows preset uses, reads them as `$env:DSH_PROFILE`. With `dsh` on the PATH, `dsh --profile "$DSH_PROFILE" --dump-config` prints the composed profile.
+Node profile environment variables and composed-config inspection are described in `references/host-plugin.md`; the Worker CLI does not implement `--dump-config`.
 
 ## Read next
 
-The files below live in this skill's base directory, which the `skill` tool reported, and the table is the complete list: do not enumerate that directory. In every deployment, including a source checkout, read these files with the file-read tool, write copies into the workspace with the file-write tool, and verify a copy by reading it back. In Desktop the directory sits inside `app.asar`, which only the Host process's own file reads can open; shell commands (`ls`, `cat`, `cp`, `cmp`), the glob and search tools (they run a native ripgrep process), `node`, and pnpm all fail on it. Never install or syntax-check a template in place; copy its contents into the workspace first.
+The table lists this skill's files relative to the base directory reported by the `skill` tool; do not enumerate the directory. Read with the file-read tool, copy with file-write, then read back. Desktop's `app.asar` cannot be read by shell/native search processes; see `references/host-plugin.md`. Never install or syntax-check templates in place.
 
 | Task | File |
 |---|---|

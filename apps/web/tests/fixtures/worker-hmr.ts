@@ -79,7 +79,8 @@ exports.apply = ctx => {
       .flatMap(message => message.content.filter(block => block.type === 'text').map(block => block.text)).join('\\n');
     const logged = agent.session.snapshotEvents().filter(event => event.type === 'system/message')
       .flatMap(event => event.data.message.content.filter(block => block.type === 'text').map(block => block.text));
-    reply(res, { system, logged });
+    const tools = requests.findLast(request => request.purpose === undefined)?.tools?.map(tool => tool.name) ?? [];
+    reply(res, { system, logged, tools });
   });
   for (const version of ['v1', 'v2']) {
     route('/hmr-probe/authoring-' + version, (req, res) => {

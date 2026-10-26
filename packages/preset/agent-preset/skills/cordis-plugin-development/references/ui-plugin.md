@@ -1,5 +1,7 @@
 # UI plugins in the Web page
 
+These instructions require a deployment that accepts a package with Client metadata. The browser Worker's local Forge source build accepts neither `dsh.client` nor custom exports, so it cannot install this UI template; even a precompiled `client.js` in its source list is insufficient. Follow the Worker system prompt and report that limitation without trying Node installation workarounds. Published npm Client packages follow a separate supported loading path.
+
 Read `templates/decoration/` with the file-read tool and write its files into your bundle directory: its `package.json` adds a `dsh.client` section (`platform`, `immediately`, `inject`) and a `./client` export beside the bundle patch.
 
 `index.js` exports `export function apply() {}`; the patch inserts one row named after the package. For a simple drawing, prefer a slot with allocated space, such as `conversation.composer.dock` when available. Keep the first version within that slot's flow; do not plan a motion path around host controls. Use `shell.overlay` only when the request needs an overlay and its placement is known.
