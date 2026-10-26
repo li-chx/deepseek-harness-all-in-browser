@@ -13,6 +13,8 @@ it('registers directly after Plugins and removes the panel, navigation and subsc
   await ctx.plugin(SlotRegistry).await()
   const locale = new LocaleRuntime(ctx)
   ctx.provide('locale', locale)
+  const offStorage = vi.fn()
+  vi.stubGlobal('__DSH_TRANSPORT__', { storage: { subscribe: () => offStorage } })
   const offNavigation = vi.fn()
   ctx.provide('layout', { panelInfo: { getSnapshot: () => ({ activePanelId: null }), subscribe: () => offNavigation } })
   vi.stubGlobal('fetch', async (_input: unknown, init: RequestInit) => {
@@ -39,4 +41,5 @@ it('registers directly after Plugins and removes the panel, navigation and subsc
   expect(slots.entries('main')).toHaveLength(0)
   expect(slots.entries('shell.overlay')).toHaveLength(0)
   expect(offNavigation).toHaveBeenCalledOnce()
+  expect(offStorage).toHaveBeenCalledOnce()
 })

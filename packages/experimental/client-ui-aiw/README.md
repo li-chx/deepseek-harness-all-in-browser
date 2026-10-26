@@ -37,7 +37,7 @@ The Worker image includes this marker plugin and discovers its Client entry thro
 
 Build results establish Host activation only. Verify a Client component separately in the running page. The official Plugins page retains its installation controls during this transition; the temporary npm form here can be removed after those controls use the Worker installer.
 
-Use the page’s **Save now** action before closing the browser. The storage provider owns persistence; the page does not turn an unconfirmed operation into a saved result.
+Use **Save now** beside the page title before closing the browser. The workbench shows acknowledged browser-storage status; terminal storage and startup failures also remain visible outside the page. The storage provider owns persistence; the page does not turn an unconfirmed operation into a saved result.
 
 -----
 

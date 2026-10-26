@@ -20,7 +20,7 @@ export function WorkbenchIcon({ size }: PropsRuntime<'sidebar.panellist'>) { ret
 export function WorkbenchToast({ useWorkbench, dismiss, t }: InjectFace<NoticeFace> & PropsLocale<'aiw'>) {
   const notice = useWorkbench(value => value.notice)
   if (notice === undefined) return null
-  const message = notice.observerWarning ? t('observerWarning', { message: notice.text })
+  const message = notice.storageWarning ? `${t('storageUnconfirmed')} ${notice.text}` : notice.observerWarning ? t('observerWarning', { message: notice.text })
     : notice.uncertain ? t('unknownOutcome', { message: notice.text }) : notice.text
   return <Toast key={notice.id} text={message} icon={<IconWarningOutlineRegular />} {...notice.success ? { tone: 'success' as const } : {}} onDone={dismiss} />
 }

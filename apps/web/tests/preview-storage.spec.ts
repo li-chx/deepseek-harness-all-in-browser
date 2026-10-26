@@ -34,17 +34,18 @@ function connection(): { value: WorkerHostConnection; status(status: VfsPersiste
   }
 }
 
-it.each(['en-US', 'zh-CN'])('shows saved only after commit acknowledgement in %s', (language) => {
+it.each(['en-US', 'zh-CN'])('leaves routine saving to the workbench in %s', (language) => {
   vi.spyOn(navigator, 'language', 'get').mockReturnValue(language)
   ui = mountPreviewStorage()
   const host = connection()
   host.status({ kind: 'pending', revision: 0, pending: 0 })
   ui.connect(host.value)
-  expect(document.querySelector('[data-worker-storage]')?.getAttribute('data-worker-storage')).toBe('pending')
+  expect(document.querySelector('[data-worker-storage]')).toBeNull()
   host.status({ kind: 'saved', revision: 1, pending: 0 })
-  expect(document.querySelector('[role="status"]')?.textContent).toBe(language === 'en-US' ? 'Saved in this browser' : '已保存在此浏览器')
+  expect(document.querySelector('[data-worker-storage]')).toBeNull()
+  expect(document.body.hasAttribute('data-preview-storage-layout')).toBe(false)
   host.status({ kind: 'pending', revision: 1, pending: 1 })
-  expect(document.querySelector('[data-worker-storage]')?.getAttribute('data-worker-storage')).toBe('pending')
+  expect(document.querySelector('[data-worker-storage]')).toBeNull()
 })
 
 it('preserves visible conflict details and blocks another save after a stale write', () => {
@@ -53,10 +54,11 @@ it('preserves visible conflict details and blocks another save after a stale wri
   const host = connection()
   ui.connect(host.value)
   host.status({ kind: 'failed', revision: 1, pending: 1, error: { code: 'STORAGE_CONFLICT', message: '<img src=x>' } })
-  expect(document.querySelector('[role="status"]')?.textContent).toContain('Another tab saved changes')
-  expect(document.querySelector('[role="status"]')?.textContent).toContain('<img src=x>')
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('Another tab saved changes')
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('<img src=x>')
   expect(document.querySelector('img')).toBeNull()
-  expect(document.querySelector('button')?.disabled).toBe(true)
+  expect(document.querySelector('button')?.textContent).toBe('Reload')
+  expect(document.querySelector('button')?.disabled).toBe(false)
   ui.dispose()
   expect(document.querySelector('[data-worker-storage]')).toBeNull()
   expect(document.body.hasAttribute('data-preview-storage-layout')).toBe(false)
@@ -66,7 +68,19 @@ it('shows failed boot before a connection exists without suggesting local data w
   vi.spyOn(navigator, 'language', 'get').mockReturnValue('en-US')
   ui = mountPreviewStorage()
   ui.fail(new Error('Invalid saved catalog'))
-  expect(document.querySelector('[role="status"]')?.textContent).toContain('Startup failed. Local data was not cleared.')
-  expect(document.querySelector('[role="status"]')?.textContent).toContain('Invalid saved catalog')
-  expect(document.querySelector('button')?.disabled).toBe(true)
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('Startup failed. Local data was not cleared.')
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('Invalid saved catalog')
+  expect(document.querySelector('button')?.textContent).toBe('Reload')
+  expect(document.querySelector('button')?.disabled).toBe(false)
+})
+
+
+it('keeps a stopped Worker visible even when the workbench is unavailable', () => {
+  vi.spyOn(navigator, 'language', 'get').mockReturnValue('en-US')
+  ui = mountPreviewStorage()
+  const host = connection()
+  ui.connect(host.value)
+  host.worker.dispatchEvent(new ErrorEvent('error', { message: 'Worker crashed' }))
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('The Worker stopped')
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('Worker crashed')
 })

@@ -160,3 +160,47 @@ describe('Worker workbench controller', () => {
   })
 
 })
+
+
+describe('workbench explicit saving', () => {
+  it('waits for commit acknowledgement and prevents duplicate save requests', async (t) => {
+    const reply = Promise.withResolvers<import('@deepseek-ai/dsh-experimental-webworker-runtime/client').VfsPersistenceStatus>()
+    let calls = 0
+    const controller = new WorkbenchController(fetch, { subscribe: () => () => {}, flush: () => { calls++; return reply.promise } })
+    t.onTestFinished(() => { controller.dispose() })
+    controller.updateStorage({ kind: 'pending', revision: 1, pending: 1 })
+    const pending = controller.flushStorage()
+    await controller.flushStorage()
+    expect(calls).toBe(1)
+    expect(controller.source.getSnapshot().flushing).toBe(true)
+    expect(controller.source.getSnapshot().storage?.kind).toBe('pending')
+    reply.resolve({ kind: 'saved', revision: 2, pending: 0 })
+    await pending
+    expect(controller.source.getSnapshot().flushing).toBe(false)
+    expect(controller.source.getSnapshot().storage).toEqual({ kind: 'saved', revision: 2, pending: 0 })
+  })
+
+  it('retains an unconfirmed save failure and does not retry it implicitly', async (t) => {
+    let calls = 0
+    const controller = new WorkbenchController(fetch, { subscribe: () => () => {}, flush: () => { calls++; return Promise.reject(new Error('Connection lost')) } })
+    t.onTestFinished(() => { controller.dispose() })
+    controller.updateStorage({ kind: 'saved', revision: 1, pending: 0 })
+    await controller.flushStorage()
+    expect(controller.source.getSnapshot().storageError).toBe('Connection lost')
+    expect(controller.source.getSnapshot().flushing).toBe(false)
+    await controller.flushStorage()
+    expect(calls).toBe(1)
+  })
+
+  it('keeps a terminal storage conflict when an earlier flush reply arrives', async (t) => {
+    const reply = Promise.withResolvers<import('@deepseek-ai/dsh-experimental-webworker-runtime/client').VfsPersistenceStatus>()
+    const controller = new WorkbenchController(fetch, { subscribe: () => () => {}, flush: () => reply.promise })
+    t.onTestFinished(() => { controller.dispose() })
+    controller.updateStorage({ kind: 'saved', revision: 1, pending: 0 })
+    const pending = controller.flushStorage()
+    controller.updateStorage({ kind: 'failed', revision: 1, pending: 1, error: { code: 'STORAGE_CONFLICT', message: 'Another tab wrote' } })
+    reply.resolve({ kind: 'saved', revision: 1, pending: 0 })
+    await pending
+    expect(controller.source.getSnapshot().storage?.kind).toBe('failed')
+  })
+})

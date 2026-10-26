@@ -4,6 +4,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
+import type { WorkerStorageControls } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
 import { WorkbenchController } from './controller.ts'
 import { WorkbenchPage, type WorkbenchInjected } from './Page.tsx'
 import { WorkbenchIcon, WorkbenchToast, type NoticeFace } from './Feedback.tsx'
@@ -26,8 +27,10 @@ export const inject = ['slots', 'locale', 'layout']
  */
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.locale.register('aiw', { en, zh }), 'aiw: dictionaries')
-  const controller = new WorkbenchController((input, init) => fetch(input, init))
+  const storage = (globalThis as { __DSH_TRANSPORT__?: { storage?: WorkerStorageControls } }).__DSH_TRANSPORT__?.storage
+  const controller = new WorkbenchController((input, init) => fetch(input, init), storage)
   ctx.effect(() => () => { controller.dispose() }, 'aiw: request lifetime')
+  if (storage !== undefined) ctx.effect(() => storage.subscribe((value) => { controller.updateStorage(value) }), 'aiw: storage status')
   const t = ctx.locale.bind('aiw')
   const injected: WorkbenchInjected = {
     hooks: { workbench: controller.source }, refresh: () => controller.refresh(),
@@ -37,6 +40,8 @@ export function apply(ctx: Context): void {
     edit: (text) => { controller.edit(text) },
     save: success => controller.save(success),
     cancel: () => { controller.cancel() },
+    flushStorage: () => controller.flushStorage(),
+    reload: () => { window.location.reload() },
   }
   ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL, locale: 'aiw', inject: () => injected }, WorkbenchPage))
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL, order: 1, label: () => t('title'), locale: 'aiw' }, WorkbenchIcon))

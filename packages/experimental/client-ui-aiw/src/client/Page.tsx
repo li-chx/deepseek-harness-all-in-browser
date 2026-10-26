@@ -18,6 +18,8 @@ export interface WorkbenchInjected {
   discard(): void
   save(successText: string): Promise<void>
   cancel(): void
+  flushStorage(): Promise<void>
+  reload(): void
 }
 /** Props derived from the main-slot registration and the workbench locale. */
 export type WorkbenchPageProps = PropsRuntime<'main'> & PropsLocale<'aiw'> & InjectFace<WorkbenchInjected>
@@ -41,7 +43,7 @@ function download(archive: unknown, name: string): void {
  * @returns The selected workbench view and its confirmation surface.
  */
 export function WorkbenchPage(props: WorkbenchPageProps): ReactNode {
-  const { t, useWorkbench, perform, refresh, openFile, newFile, edit, discard, save, cancel } = props
+  const { t, useWorkbench, perform, refresh, openFile, newFile, edit, discard, save, cancel, flushStorage, reload } = props
   const state = useWorkbench(value => value)
   const [tab, setTab] = useState<Tab>('plugins')
   const [path, setPath] = useState('/dsh/workspace')
@@ -62,6 +64,10 @@ export function WorkbenchPage(props: WorkbenchPageProps): ReactNode {
   const id = useId()
   const dirty = state.editor !== undefined && state.editor.text !== state.editor.original
   const busy = state.busy
+  const storageFailed = state.storage?.kind === 'failed' || state.storageError !== undefined
+  const storageMessage = t(state.storageError !== undefined ? 'storageUnconfirmed' : state.storage?.kind === 'failed'
+    ? state.storage.error?.code === 'STORAGE_CONFLICT' ? 'storageConflict' : 'storageFailed'
+    : state.flushing || state.storage?.kind === 'pending' ? 'storagePending' : state.storage?.kind === 'saved' ? 'storageSaved' : 'storageDisabled')
   const guard = (action: () => void): void => {
     if (!dirty) { action(); return }
     setConfirmation({ title: t('discardTitle'), description: t('discardDetail'), accept: t('discard'), action: () => { discard(); action() } })
@@ -106,8 +112,18 @@ export function WorkbenchPage(props: WorkbenchPageProps): ReactNode {
         <h1>{t('title')}</h1>
         <p>{t('subtitle')}</p>
       </div>
-      <Button variant="outline" disabled={busy} onClick={() => { void refresh() }}>{t('refresh')}</Button>
+      <div className={css.actions}>
+        <Button variant="outline" disabled={busy} onClick={() => { void refresh() }}>{t('refresh')}</Button>
+        <Button variant="primary" disabled={state.flushing || state.storage === undefined || storageFailed} onClick={() => { void flushStorage() }}>{t('saveNow')}</Button>
+      </div>
     </header>
+    <div className={css.notice}
+      data-aiw-storage={storageFailed ? 'failed' : state.storage?.kind ?? 'disabled'} role={storageFailed ? 'alert' : 'status'}>
+      <span>{storageMessage}
+        {storageFailed && <span className={css.location}>{state.storageError ?? state.storage?.error?.message}</span>}
+      </span>
+      {storageFailed && <Button onClick={() => { guard(reload) }}>{t('reload')}</Button>}
+    </div>
     <div className={css.tabs}>
       <SegmentedTabs items={tabs} value={tab} label={t('tabs')} onChange={(next) => { guard(() => { setTab(next); if (next === 'files') void directory(state.directory) }) }} />
     </div>

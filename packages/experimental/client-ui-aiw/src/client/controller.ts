@@ -2,6 +2,7 @@
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type {
   AiwAction, AiwCommandResult, AiwFileEntry, AiwHistoryVersion, AiwImportPreview, AiwProject, AiwStatus,
+  VfsPersistenceStatus, WorkerStorageControls,
 } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
 
 /** Imported JSON remains untrusted until the Worker validates its archive. */
@@ -10,13 +11,23 @@ export type WorkbenchAction = AiwAction
   | { action: 'plugin-import'; archive: unknown }
 
 /** Request-level feedback that outlives the main panel. */
-export interface WorkbenchNotice { id: number; text: string; success: boolean; uncertain?: boolean; observerWarning?: boolean }
+export interface WorkbenchNotice {
+  id: number
+  text: string
+  success: boolean
+  uncertain?: boolean
+  observerWarning?: boolean
+  storageWarning?: boolean
+}
 /** An unsaved editor draft survives page and tab navigation. */
 export interface WorkbenchDraft { path: string; text: string; original: string; sha256?: string; writable: boolean }
 /** Stable projection owned by one workbench controller. */
 export interface WorkbenchSnapshot {
   ready: boolean
   busy: boolean
+  flushing: boolean
+  storage?: VfsPersistenceStatus | undefined
+  storageError?: string | undefined
   status?: AiwStatus | undefined
   projects: AiwProject[]
   directory: string
@@ -80,7 +91,7 @@ function status(value: Record<string, unknown>): AiwStatus {
 
 /** One instance owns requests and observable data; disposal aborts every accepted call. */
 export class WorkbenchController {
-  private readonly state = createSnapshotStore<WorkbenchSnapshot>({ ready: false, busy: false, projects: [], directory: '/dsh/workspace', entries: [], versions: [], output: '' })
+  private readonly state = createSnapshotStore<WorkbenchSnapshot>({ ready: false, busy: false, flushing: false, projects: [], directory: '/dsh/workspace', entries: [], versions: [], output: '' })
   /** Stable renderer-bound snapshot source for the page and shell feedback. */
   readonly source = { getSnapshot: () => this.state.getSnapshot(), subscribe: (listener: () => void) => this.state.subscribe(listener) }
   private readonly requests = new Set<AbortController>()
@@ -88,7 +99,31 @@ export class WorkbenchController {
   private noticeId = 0
   private loading: Promise<void> | undefined
 
-  constructor(private readonly fetcher: typeof fetch) {}
+  constructor(private readonly fetcher: typeof fetch, private readonly storage?: WorkerStorageControls) {}
+
+  /** Publish acknowledged filesystem status independently of page navigation.
+   * @param value - Validated status from the owning Worker connection.
+   */
+  updateStorage(value: VfsPersistenceStatus): void {
+    if (this.state.getSnapshot().storage?.kind !== 'failed') this.set({ storage: value })
+  }
+
+  /** Wait for application buffers and browser commits; failures retain an unconfirmed save state. */
+  async flushStorage(): Promise<void> {
+    const state = this.state.getSnapshot()
+    if (this.closed || this.storage === undefined || state.flushing || state.storage?.kind === 'failed' || state.storageError !== undefined) return
+    const lifetime = new AbortController()
+    this.requests.add(lifetime)
+    this.set({ flushing: true })
+    try {
+      const storage = await this.storage.flush(lifetime.signal)
+      lifetime.signal.throwIfAborted()
+      this.updateStorage(storage)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.set({ storageError: message, notice: { id: ++this.noticeId, text: message, success: false, storageWarning: true } })
+    } finally { this.requests.delete(lifetime); this.set({ flushing: false }) }
+  }
 
   private set(fields: Partial<WorkbenchSnapshot>): void {
     if (!this.closed) this.state.set({ ...this.state.getSnapshot(), ...fields })

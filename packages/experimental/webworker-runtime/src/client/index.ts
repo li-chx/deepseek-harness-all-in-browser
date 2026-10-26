@@ -9,7 +9,8 @@
  * @module @deepseek-ai/dsh-experimental-webworker-runtime/client
  */
 import { serveHttpTransport } from '../transport/http-port.ts'
-import type { TunnelStorageInit } from '../transport/frames.ts'
+import { parseStorageStatus, type TunnelStorageInit } from '../transport/frames.ts'
+import type { VfsPersistenceStatus } from '../storage/persistence-types.ts'
 import type { HttpTransport } from '../transport/http-transport.ts'
 import { IMAGE_FILE_NAME } from '../image-layout.ts'
 import type { ClientFileUploadHooks } from '@deepseek-ai/dsh-client-file-upload/types'
@@ -34,6 +35,20 @@ export {
   type PreviewFixtureManifest, type PreviewFixtureManifestEntry,
 } from '../fixture-manifest.ts'
 
+/** Page-owned access to commit status and explicit durable saves. */
+export interface WorkerStorageControls {
+  /** Observe acknowledged commits, replaying the latest status.
+   * @param listener - Observer released by the consuming plugin.
+   * @returns Observer disposer; no save is implied.
+   */
+  subscribe(listener: (status: VfsPersistenceStatus) => void): () => void
+  /** Drain application buffers and filesystem commits without clearing local data.
+   * @param signal - Cancellation of the caller's wait; committed writes remain committed.
+   * @returns Validated storage status after the save request.
+   */
+  flush(signal: AbortSignal): Promise<VfsPersistenceStatus>
+}
+
 /** Transport global the connection plugin reads instead of building an HTTP carrier. */
 interface ClientTransportGlobal {
   __DSH_TRANSPORT__?: {
@@ -47,6 +62,8 @@ interface ClientTransportGlobal {
     loadBundle: (url: string) => Promise<void>
     /** The page spawned the worker the Host runs in, so the page owns it. */
     ownsHost: boolean
+    /** Available only when the page enabled durable Worker storage. */
+    storage?: WorkerStorageControls
   }
 }
 
@@ -187,6 +204,14 @@ export async function connectWorkerHost(worker: Worker, options?: WorkerHostConn
       // The host lives in a worker this page spawned: the page owns it, so
       // the privileged surface stays reachable off loopback authorities.
       ownsHost: true,
+      ...options?.storage === undefined ? {} : { storage: {
+        subscribe: (listener: (status: VfsPersistenceStatus) => void) => tunnel.subscribeStorageStatus(listener),
+        flush: async (signal: AbortSignal) => {
+          const response = await tunnel.fetch('/__storage/flush', { method: 'POST', signal })
+          if (!response.ok) throw new Error(`Storage confirmation returned HTTP ${String(response.status)}`)
+          return parseStorageStatus(await response.json())
+        },
+      } },
     }
     ;(globalThis as ClientFileUploadGlobal).__DSH_FILE_UPLOAD__ = {
       fetch: (input, init) => tunnel.fetch(input, init),
