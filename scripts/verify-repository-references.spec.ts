@@ -72,6 +72,24 @@ describe('unique object-name prefix search', () => {
 })
 
 describe('maintained repository reference policy', () => {
+  it('accepts uv artifact byte counts without exempting quoted identifiers or commit URLs', () => {
+    const decimal = ['634', '4383'].join('')
+    const commits = new Set([decimal])
+    const wheel = `{ url = "https://artifacts.example.test/wheel.whl", size = ${decimal} },`
+    expect(findRepositoryReferences('python/sdk/uv.lock', wheel, commits)).toEqual([])
+    expect(findRepositoryReferences('uv.lock', `size = ${decimal}`, commits)).toEqual([])
+    for (const source of [
+      wheel.replace('wheel.whl', `commit/${decimal}`),
+      wheel.replace(`size = ${decimal}`, `size = "${decimal}"`),
+      `revision = "${decimal}"`,
+    ]) {
+      expect(findRepositoryReferences('python/sdk/uv.lock', source, commits))
+        .toEqual([{ file: 'python/sdk/uv.lock', line: 1, kind: 'commit-hash' }])
+    }
+    expect(findRepositoryReferences('guide.md', wheel, commits))
+      .toEqual([{ file: 'guide.md', line: 1, kind: 'commit-hash' }])
+  })
+
   it('permits only the independent kit repository and its source URLs', () => {
     for (const suffix of ['', '.git', '/tree/main/packages/entry']) {
       expect(findRepositoryReferences('package.json', `${organizationUrl}/libreoffice-kit${suffix}`, new Set())).toEqual([])

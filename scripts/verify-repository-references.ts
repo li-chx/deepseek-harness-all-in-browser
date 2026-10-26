@@ -36,7 +36,7 @@ function isMaintained(file: string): boolean {
  * @param file - Repository-relative path used in diagnostics and exclusions.
  * @param source - File text or a symlink's stored target.
  * @param commits - Lowercase, unambiguous full or abbreviated commit identifiers.
- * @returns One finding per line and reference kind; digests and other Git object types are accepted.
+ * @returns One finding per line and reference kind; digests, uv lockfile byte sizes and other Git object types are accepted.
  */
 export function findRepositoryReferences(
   file: string,
@@ -49,7 +49,10 @@ export function findRepositoryReferences(
     if (organizationUrl.test(canonicalReferenceText(line).replace(kitRepositoryUrl, ''))) {
       references.push({ file, line: index + 1, kind: 'organization-url' })
     }
-    if ([...line.matchAll(commitCandidate)].some(match => commits.has(match[0].toLowerCase()))) {
+    // Artifact byte counts can coincide with an all-decimal Git object prefix.
+    const referenceText = file === 'uv.lock' || file.endsWith('/uv.lock')
+      ? line.replace(/((?:^|[,{])\s*size\s*=\s*)\d+(?=\s*[,}]|$)/g, '$1') : line
+    if ([...referenceText.matchAll(commitCandidate)].some(match => commits.has(match[0].toLowerCase()))) {
       references.push({ file, line: index + 1, kind: 'commit-hash' })
     }
   }
