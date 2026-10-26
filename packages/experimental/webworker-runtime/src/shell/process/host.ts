@@ -20,6 +20,8 @@ import type { ShellFileSystem } from '../types.ts'
 import type { FilesystemOperation, FromProcessFrame, ShellStartFrame } from './protocol.ts'
 import { runShellProcess } from './child.ts'
 import type { ProcessScope } from './child.ts'
+import type { VirtualExecutableRegistry } from './virtual-executables.ts'
+import { executablePrograms, executeRegistered, parseExecutableInvocation } from './executables.ts'
 
 /** What the caller must supply to start one process. */
 export interface ProcessStartOptions {
@@ -39,6 +41,8 @@ export interface ProcessStartOptions {
   onExit: (code: number) => void
   /** The filesystem the command acts on; defaults to the mounted VFS. */
   fs?: ShellFileSystem | undefined
+  /** Lifecycle-owned command capabilities supplied by this Worker host. */
+  registry?: VirtualExecutableRegistry | undefined
 }
 
 /** A started command, from the host's side. */
@@ -100,41 +104,78 @@ function startWorkerProcess(options: ProcessStartOptions): RunningProcess {
   // the build-order trap a sibling artifact would bring.
   const worker = new Worker(self.location.href, { type: 'module' })
   let settled = false
+  const stopping = new AbortController()
+  const names = options.registry?.names() ?? []
+  const allowed = new Set(names)
+  const pending = new Set<Promise<void>>()
+  const invocationIds = new Set<number>()
   const settle = (code: number): void => {
     if (settled) return
     settled = true
+    stopping.abort(new Error('shell process exited'))
     worker.terminate()
-    options.onExit(code)
+    // A terminated process must not leave an owned host command running after its exit event.
+    void Promise.allSettled([...pending]).then(() => { options.onExit(code) })
+  }
+  const track = (task: Promise<void>): void => {
+    pending.add(task)
+    void task.finally(() => { pending.delete(task) })
   }
 
   worker.addEventListener('message', (event: MessageEvent) => {
-    const frame = event.data as FromProcessFrame
+    if (settled) return
+    const data: unknown = event.data
+    if (!data || typeof data !== 'object' || !('t' in data) || typeof data.t !== 'string'
+      || !['shell-out', 'shell-exit', 'exec-call', 'fs-call'].includes(data.t)) return
+    const frame = data as FromProcessFrame
     if (frame.t === 'shell-out') {
-      options.onOutput(frame.stream, frame.text)
+      if (['stdout', 'stderr'].includes(frame.stream) && typeof frame.text === 'string') options.onOutput(frame.stream, frame.text)
       return
     }
     if (frame.t === 'shell-exit') {
-      settle(frame.code)
+      settle(Number.isInteger(frame.code) ? frame.code : 1)
       return
     }
-    void serveFilesystemCall(fs, frame.op, frame.args).then(
-      (value) => { worker.postMessage({ t: 'fs-reply', id: frame.id, value }) },
+    if (frame.t === 'exec-call') {
+      if (!Number.isSafeInteger(frame.id) || frame.id < 1 || invocationIds.has(frame.id)) {
+        options.onOutput('stderr', 'bash: invalid host executable request id\n')
+        settle(1)
+        return
+      }
+      invocationIds.add(frame.id)
+      const task = Promise.resolve().then(async () => {
+        const invocation = parseExecutableInvocation(frame.invocation)
+        return await executeRegistered(options.registry, allowed, invocation, fs, stopping.signal)
+      }).then(
+        (value) => { if (!settled) worker.postMessage({ t: 'exec-reply', id: frame.id, value }) },
+        (error: unknown) => {
+          if (!settled) worker.postMessage({ t: 'exec-reply', id: frame.id,
+            failure: { message: error instanceof Error ? error.message : String(error) } })
+        },
+      )
+      track(task)
+      return
+    }
+    track(serveFilesystemCall(fs, frame.op, frame.args).then(
+      (value) => { if (!settled) worker.postMessage({ t: 'fs-reply', id: frame.id, value }) },
       (error: unknown) => {
         const failure = {
           code: (error as { code?: string }).code,
           message: error instanceof Error ? error.message : String(error),
         }
-        worker.postMessage({ t: 'fs-reply', id: frame.id, failure })
+        if (!settled) worker.postMessage({ t: 'fs-reply', id: frame.id, failure })
       },
-    )
+    ))
   })
   worker.addEventListener('error', (event: ErrorEvent) => {
+    if (settled) return
     options.onOutput('stderr', `bash: process worker failed: ${event.message}\n`)
     settle(1)
   })
 
   const start: ShellStartFrame = {
     t: 'shell-start',
+    executables: names,
     script: options.script,
     argv: options.argv,
     cwd: options.cwd,
@@ -144,7 +185,9 @@ function startWorkerProcess(options: ProcessStartOptions): RunningProcess {
   worker.postMessage(start)
 
   return {
-    interrupt: () => { if (!settled) worker.postMessage({ t: 'shell-signal' }) },
+    interrupt: () => {
+      if (!settled) { stopping.abort(new Error('killed by signal')); worker.postMessage({ t: 'shell-signal' }) }
+    },
     // The reason this whole module exists: a worker dies on command, even
     // mid-loop, so a timeout is enforceable rather than advisory.
     destroy: () => { settle(130) },
@@ -154,12 +197,16 @@ function startWorkerProcess(options: ProcessStartOptions): RunningProcess {
 /** The inline process: the same command on this thread, stoppable only by asking. */
 function startInlineProcess(options: ProcessStartOptions): RunningProcess {
   const stopping = new AbortController()
+  const fs = options.fs ?? hostFileSystem()
+  const names = options.registry?.names() ?? []
+  const allowed = new Set(names)
   const runOptions = {
     cwd: options.cwd,
     env: options.env,
     stdin: options.stdin,
     signal: stopping.signal,
-    fs: options.fs ?? hostFileSystem(),
+    fs,
+    programs: executablePrograms(names, invocation => executeRegistered(options.registry, allowed, invocation, fs, stopping.signal)),
     onOutput: options.onOutput,
   }
   const run = options.script === undefined

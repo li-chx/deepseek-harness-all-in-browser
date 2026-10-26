@@ -2,6 +2,7 @@
 import { sha256 } from '@noble/hashes/sha2.js'
 import type { ForgeInstaller } from './installer.ts'
 import { ForgeError, object } from './protocol.ts'
+import { readForgeSource } from './source.ts'
 import type { VirtualExecutable, VirtualExecutableExit } from '../shell/process/virtual-executables.ts'
 
 function exit(exitCode: number, stdout = '', stderr = ''): VirtualExecutableExit {
@@ -58,7 +59,7 @@ export class ForgeCommands {
       context.signal.addEventListener('abort', cancel, { once: true })
       if (context.signal.aborted) cancel()
       this.cancellations.add(controller)
-      const task = this.run(args, controller.signal, context.output).catch((error: unknown) =>
+      const task = this.run(args, controller.signal, context).catch((error: unknown) =>
         exit(1, '', `${error instanceof Error ? error.message : String(error)}\n`))
       this.pending.add(task)
       void task.finally(() => {
@@ -70,7 +71,7 @@ export class ForgeCommands {
     },
   }
 
-  private async run(args: readonly string[], signal: AbortSignal, output: (stream: 'stdout' | 'stderr', text: string) => void): Promise<VirtualExecutableExit> {
+  private async run(args: readonly string[], signal: AbortSignal, context: Parameters<VirtualExecutable['prepare']>[1]): Promise<VirtualExecutableExit> {
     signal.throwIfAborted()
     const probe = this.dsh.runSync(args)
     if (probe.kind === 'exit') return probe
@@ -80,24 +81,31 @@ export class ForgeCommands {
     const action = args[equals ? 2 : 3]
     const spec = args[equals ? 3 : 4]
     if (profile !== this.profile) throw new ForgeError('profile-mismatch', `This Worker manages only profile ${this.profile}`)
-    if (args.length !== (equals ? 4 : 5) || !['add', 'update', 'remove'].includes(action ?? '') || spec === undefined) {
-      throw new ForgeError('unsupported-command', 'Use dsh plugin --profile <profile> add|update|remove <npm-package>')
+    if (args.length !== (equals ? 4 : 5) || !['add', 'update', 'remove', 'build'].includes(action ?? '') || spec === undefined) {
+      throw new ForgeError('unsupported-command', 'Use dsh plugin --profile <profile> add|update|remove <npm-package>, or build <directory>')
     }
-    const name = npmName(spec)
+    const base = this.baseUrl
+    if (action !== 'remove' && base === undefined) throw new ForgeError('not-configured', 'Configure a Forge service before installing plugins')
+    const source = action === 'build' ? await readForgeSource(spec, context.cwd, context.filesystem, signal) : undefined
+    const name = source?.name ?? npmName(spec)
     const installed = this.installer.installed().plugins.find(plugin => plugin.name === name)
+    if (source !== undefined) {
+      if (installed !== undefined && installed.pluginId !== source.id) throw new ForgeError('name-conflict', 'A plugin with this package name is already installed under another id')
+      if (this.installer.installed().plugins.some(plugin => plugin.pluginId === source.id && plugin.name !== source.name)) throw new ForgeError('name-conflict', 'An installed plugin id cannot change its package name')
+    }
     if (action === 'remove') {
       if (installed === undefined) throw new ForgeError('not-installed', `${name} is not installed by Forge`)
       const result = await this.installer.remove(installed.pluginId, signal)
       signal.throwIfAborted()
       return result.status === 'removed' ? exit(0, `Removed ${name}\n`) : exit(1, '', `${result.message ?? 'Plugin removal failed'}\n`)
     }
-    const base = this.baseUrl
     if (base === undefined) throw new ForgeError('not-configured', 'Configure a Forge service before installing plugins')
     const id = installed?.pluginId ?? `npm-${[...sha256(new TextEncoder().encode(name))].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
-    output('stdout', `Building ${spec} for ${this.installer.target().generation}\n`)
-    const response = await this.fetcher(new URL('/v1/packages/builds', base), {
+    context.output('stdout', `Building ${spec} for ${this.installer.target().generation}\n`)
+    const response = await this.fetcher(new URL(source === undefined ? '/v1/packages/builds' : '/v1/builds', base), {
       method: 'POST', headers: { 'content-type': 'application/json' }, signal,
-      body: JSON.stringify({ protocol: 1, generation: this.installer.target().generation, pluginId: id, spec }),
+      body: JSON.stringify({ protocol: 1, generation: this.installer.target().generation,
+        ...(source === undefined ? { pluginId: id, spec } : { plugin: source }) }),
     })
     const payload: unknown = await response.json()
     if (!response.ok) {
@@ -105,6 +113,13 @@ export class ForgeCommands {
       throw new ForgeError(typeof failure.code === 'string' ? failure.code : 'build-failed', typeof failure.message === 'string' ? failure.message : 'Forge build failed')
     }
     signal.throwIfAborted()
+    if (source !== undefined) {
+      const returned = object(object(payload).plugin)
+      if (returned.id !== source.id || returned.name !== source.name || returned.version !== source.version
+        || returned.entry !== source.entry) {
+        throw new ForgeError('build-identity-mismatch', 'Forge returned a different source plugin identity or entry')
+      }
+    }
     const result = await this.installer.install(payload, base, signal)
     signal.throwIfAborted()
     return result.status === 'active' || result.status === 'disabled'

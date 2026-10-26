@@ -15,21 +15,24 @@ let table: Map<string, ShellProgram> | undefined
 
 /**
  * The standard command table, built once and shared by every command line.
+ * @param additional - Host capabilities available to this invocation.
  * @returns the program table, keyed by command name.
  */
-export function standardPrograms(): ReadonlyMap<string, ShellProgram> {
+export function standardPrograms(additional?: ReadonlyMap<string, ShellProgram>): ReadonlyMap<string, ShellProgram> {
   table ??= new Map<string, ShellProgram>([
     ...Object.entries(BUILTIN_PROGRAMS),
     ...Object.entries(FILE_PROGRAMS),
     ...Object.entries(TEXT_PROGRAMS),
-    ['which', which],
+    ['which', (argv, io, state, fs) => which(standardPrograms())(argv, io, state, fs)],
   ])
-  return table
+  if (additional === undefined || additional.size === 0) return table
+  const combined = new Map([...table, ...additional])
+  combined.set('which', which(combined))
+  return combined
 }
 
 /** Reports which of the requested names this shell can run. */
-const which: ShellProgram = (argv, io) => {
-  const known = standardPrograms()
+const which = (known: ReadonlyMap<string, ShellProgram>): ShellProgram => (argv, io) => {
   let status = 0
   for (const name of argv.slice(1)) {
     // Every program is built into the shell, so a known name reports itself

@@ -13,6 +13,7 @@ import { MemoryVfs } from '@deepseek-ai/dsh-experimental-webworker-runtime/src/s
 import { setActiveVfs } from '@deepseek-ai/dsh-experimental-webworker-runtime/src/storage/active.ts'
 import { startProcess } from '@deepseek-ai/dsh-experimental-webworker-runtime/src/shell/process/host.ts'
 import { runShellProcess } from '@deepseek-ai/dsh-experimental-webworker-runtime/src/shell/process/child.ts'
+import { VirtualExecutableRegistry } from '../../src/shell/process/virtual-executables.ts'
 import { isShellStartFrame } from '@deepseek-ai/dsh-experimental-webworker-runtime/src/shell/process/protocol.ts'
 import type { FromProcessFrame, ToProcessFrame } from '@deepseek-ai/dsh-experimental-webworker-runtime/src/shell/process/protocol.ts'
 
@@ -31,6 +32,8 @@ let started: LoopbackWorker[]
 class LoopbackWorker {
   readonly url: string
   terminated = false
+  readonly received: ToProcessFrame[] = []
+  latePosts = 0
   private readonly hostListeners: ((event: MessageEvent) => void)[] = []
   private childListener: ((event: MessageEvent) => void) | undefined
   private closed = false
@@ -43,7 +46,8 @@ class LoopbackWorker {
 
   /** Host → child. The first frame starts the real child half. */
   postMessage(frame: ToProcessFrame): void {
-    if (this.terminated) return
+    if (this.terminated) { this.latePosts++; return }
+    this.received.push(frame)
     queueMicrotask(() => {
       if (this.terminated) return
       if (isShellStartFrame(frame)) {
@@ -57,6 +61,9 @@ class LoopbackWorker {
       this.childListener?.({ data: frame } as MessageEvent)
     })
   }
+
+  /** Send an untrusted process frame to the real host receiver. */
+  inject(frame: unknown): void { for (const listener of this.hostListeners) listener({ data: frame } as MessageEvent) }
 
   /** Child → host. */
   private toHost(frame: FromProcessFrame): void {
@@ -72,6 +79,7 @@ class LoopbackWorker {
   }
 
   terminate(): void {
+    this.childListener?.({ data: { t: 'shell-signal' } } as MessageEvent)
     this.terminated = true
   }
 
@@ -96,12 +104,13 @@ afterEach(() => {
 })
 
 /** Run one command line through the process model and collect everything. */
-async function run(script: string, stdin = ''): Promise<{ code: number; stdout: string; stderr: string }> {
+async function run(script: string, stdin = '', registry?: VirtualExecutableRegistry): Promise<{ code: number; stdout: string; stderr: string }> {
   let stdout = ''
   let stderr = ''
   const code = await new Promise<number>((settle) => {
     startProcess({
       script,
+      registry,
       argv: ['bash', '-c', script],
       cwd: WORKSPACE,
       env: { HOME: '/dsh/home' },
@@ -195,4 +204,87 @@ it('runs an explicit argv without a command line to parse', async () => {
     })
   })
   expect({ code, stdout }).toEqual({ code: 0, stdout: 'kept\n' })
+})
+
+it('host capabilities preserve parsed argv, cwd, env, pipeline input and redirection output', async () => {
+  const registry = new VirtualExecutableRegistry()
+  registry.register({ name: 'dsh', runSync: () => ({ kind: 'asynchronous' }), prepare: async (args, context) => {
+    expect((await context.filesystem.stat(context.cwd))?.directory).toBe(true)
+    context.output('stdout', 'progress\n')
+    context.output('stderr', 'diagnostic\n')
+    return { kind: 'exit', exitCode: 0, stdout: JSON.stringify({ args, cwd: context.cwd, value: context.env.VALUE, stdin: context.stdin }) + '\n', stderr: '' }
+  } })
+  registry.register({ name: 'which', runSync: () => ({ kind: 'asynchronous' }), prepare: async () => { throw Error('Shell which must use its merged table') } })
+  const script = 'mkdir nested && cd nested && echo input | VALUE=kept dsh "two words" > result 2> error && cat result && cat error && which ls dsh'
+  const result = await run(script, '', registry)
+  expect(result).toMatchObject({ code: 0, stderr: '' })
+  expect(result.stdout).toBe('progress\n' + JSON.stringify({ args: ['two words'], cwd: WORKSPACE + '/nested', value: 'kept', stdin: 'input\n' })
+    + '\ndiagnostic\nls: shell built-in command\ndsh: shell built-in command\n')
+  expect(vfs.readFileSync(WORKSPACE + '/nested/error', 'utf8')).toBe('diagnostic\n')
+})
+
+it.each(['interrupt', 'destroy'] as const)('%s aborts host commands and waits for their cleanup before process exit', async (method) => {
+  const registry = new VirtualExecutableRegistry()
+  const entered = Promise.withResolvers<undefined>()
+  const aborted = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  const exited = Promise.withResolvers<number>()
+  let cleaned = false
+  let exitCalled = false
+  registry.register({ name: 'blocking', runSync: () => ({ kind: 'asynchronous' }), prepare: async (_args, context) => {
+    context.signal.addEventListener('abort', () => { aborted.resolve(undefined) }, { once: true })
+    entered.resolve(undefined)
+    await aborted.promise
+    await release.promise
+    cleaned = true
+    context.signal.throwIfAborted()
+    return { kind: 'exit', exitCode: 0, stdout: '', stderr: '' }
+  } })
+  const process = startProcess({ script: 'blocking', argv: ['bash', '-c', 'blocking'], cwd: WORKSPACE, env: {}, stdin: '', registry,
+    onOutput: () => {}, onExit: (code) => { exitCalled = true; expect(cleaned).toBe(true); exited.resolve(code) } })
+  await entered.promise
+  process[method]()
+  await aborted.promise
+  expect(exitCalled).toBe(false)
+  release.resolve(undefined)
+  expect(await exited.promise).not.toBe(0)
+  expect(started[0]?.latePosts).toBe(0)
+})
+
+it('worker exit aborts owned host commands and refuses forged or malformed invocation requests', async () => {
+  const registry = new VirtualExecutableRegistry()
+  const called = Promise.withResolvers<undefined>()
+  const aborted = Promise.withResolvers<undefined>()
+  const exited = Promise.withResolvers<number>()
+  registry.register({ name: 'blocking', runSync: () => ({ kind: 'asynchronous' }), prepare: async (_args, context) => {
+    context.signal.addEventListener('abort', () => { aborted.resolve(undefined) }, { once: true })
+    called.resolve(undefined)
+    await aborted.promise
+    context.signal.throwIfAborted()
+    return { kind: 'exit', exitCode: 0, stdout: '', stderr: '' }
+  } })
+  startProcess({ script: 'sleep 30', argv: ['bash', '-c', 'sleep 30'], cwd: WORKSPACE, env: {}, stdin: '', registry,
+    onOutput: () => {}, onExit: (code) => { exited.resolve(code) } })
+  const worker = started[0]!
+  worker.inject({ t: 'exec-call', id: 101, invocation: { argv: ['unregistered'], cwd: WORKSPACE, env: {}, stdin: '' } })
+  worker.inject({ t: 'exec-call', id: 102, invocation: { argv: ['blocking', 1], cwd: WORKSPACE, env: {}, stdin: '' } })
+  await vi.waitFor(() => { expect(worker.received.filter(frame => frame.t === 'exec-reply')).toHaveLength(2) })
+  expect(worker.received.filter(frame => frame.t === 'exec-reply').every(frame => frame.failure !== undefined)).toBe(true)
+  worker.inject({ t: 'exec-call', id: 103, invocation: { argv: ['blocking'], cwd: WORKSPACE, env: {}, stdin: '' } })
+  await called.promise
+  worker.inject({ t: 'shell-exit', code: 0 })
+  await aborted.promise
+  expect(await exited.promise).toBe(0)
+  expect(worker.latePosts).toBe(0)
+})
+
+it('registered delegators are refused instead of recursively launching another host command', async () => {
+  const registry = new VirtualExecutableRegistry()
+  registry.register({ name: 'delegator', runSync: () => ({ kind: 'asynchronous' }), prepare: async (_args, context) => ({
+    kind: 'delegate', argv: ['delegator'], filesystem: context.filesystem,
+    missingExecutable: { kind: 'exit', exitCode: 127, stdout: '', stderr: 'missing' },
+  }) })
+  const result = await run('delegator', '', registry)
+  expect(result.code).toBe(1)
+  expect(result.stderr).toContain('delegation is not supported')
 })

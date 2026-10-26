@@ -12,6 +12,8 @@
 /** The first frame a process worker receives; it also selects its role. */
 export interface ShellStartFrame {
   t: 'shell-start'
+  /** Host-owned command capabilities available to this process only. */
+  executables?: readonly string[]
   /** Command source for `bash -c`, or undefined when `argv` names a program directly. */
   script?: string | undefined
   /** The program and arguments, used when `script` is absent. */
@@ -66,10 +68,10 @@ export interface FilesystemReplyFrame {
 }
 
 /** Everything the host sends to a process worker. */
-export type ToProcessFrame = ShellStartFrame | ShellSignalFrame | FilesystemReplyFrame
+export type ToProcessFrame = ShellStartFrame | ShellSignalFrame | FilesystemReplyFrame | ExecutableReplyFrame
 
 /** Everything a process worker sends to its host. */
-export type FromProcessFrame = ShellOutputFrame | ShellExitFrame | FilesystemCallFrame
+export type FromProcessFrame = ShellOutputFrame | ShellExitFrame | FilesystemCallFrame | ExecutableCallFrame
 
 /**
  * Whether a message is the frame that turns a fresh worker into a shell
@@ -79,4 +81,27 @@ export type FromProcessFrame = ShellOutputFrame | ShellExitFrame | FilesystemCal
  */
 export function isShellStartFrame(data: unknown): data is ShellStartFrame {
   return typeof data === 'object' && data !== null && (data as { t?: unknown }).t === 'shell-start'
+}
+
+/** One parsed shell command asking the host to run a registered capability. */
+export interface ExecutableInvocation {
+  argv: readonly string[]
+  cwd: string
+  env: Record<string, string>
+  stdin: string
+}
+
+/** An executable RPC request, distinct from filesystem calls. */
+export interface ExecutableCallFrame {
+  t: 'exec-call'
+  id: number
+  invocation: ExecutableInvocation
+}
+
+/** Aggregated command output, subsequently routed by the child's ShellIo. */
+export interface ExecutableReplyFrame {
+  t: 'exec-reply'
+  id: number
+  value?: { exitCode: number; stdout: string; stderr: string }
+  failure?: { message: string }
 }

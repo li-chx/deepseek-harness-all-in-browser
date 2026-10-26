@@ -9,6 +9,7 @@
  */
 
 import { runShellCommand, runShellProgram } from '../interpret.ts'
+import { executablePrograms, parseExecutableResult } from './executables.ts'
 import { filesystemError } from '../fs-access.ts'
 import type { ShellDirent, ShellFileSystem, ShellStats } from '../types.ts'
 import type { FilesystemOperation, FromProcessFrame, ShellStartFrame, ToProcessFrame } from './protocol.ts'
@@ -41,12 +42,13 @@ export function runShellProcess(start: ShellStartFrame, scope: ProcessScope): vo
       stopping.abort(new Error('killed by signal'))
       return
     }
-    if (frame.t !== 'fs-reply') return
+    if (frame.t !== 'fs-reply' && frame.t !== 'exec-reply') return
     const waiting = pending.get(frame.id)
     if (waiting === undefined) return
     pending.delete(frame.id)
     if (frame.failure === undefined) waiting.settle(frame.value)
-    else waiting.fail(filesystemError(frame.failure.code ?? 'EIO', 'fs', frame.failure.message))
+    else waiting.fail(frame.t === 'fs-reply'
+      ? filesystemError(frame.failure.code ?? 'EIO', 'fs', frame.failure.message) : new Error(frame.failure.message))
   })
 
   const call = async (op: FilesystemOperation, args: readonly unknown[]): Promise<unknown> => {
@@ -67,7 +69,19 @@ export function runShellProcess(start: ShellStartFrame, scope: ProcessScope): vo
     rename: async (from: string, to: string) => { await call('rename', [from, to]) },
   }
 
+  const names = start.executables ?? []
+  if (!Array.isArray(names) || !names.every(name => typeof name === 'string' && name.length > 0 && !name.includes('/') && !name.includes('\0'))) {
+    scope.postMessage({ t: 'shell-exit', code: 1 }); scope.close(); return
+  }
+  const programs = executablePrograms(names, async (invocation) => {
+    nextCall += 1
+    const id = nextCall
+    const reply = new Promise<unknown>((settle, fail) => { pending.set(id, { settle, fail }) })
+    scope.postMessage({ t: 'exec-call', id, invocation })
+    return parseExecutableResult(await reply)
+  })
   const options = {
+    programs,
     cwd: start.cwd,
     env: start.env,
     stdin: start.stdin,

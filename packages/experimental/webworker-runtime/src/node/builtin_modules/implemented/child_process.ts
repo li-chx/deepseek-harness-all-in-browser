@@ -276,7 +276,7 @@ function spawnCommand(
         entry.process = { interrupt: () => { controller.abort() }, destroy: () => { controller.abort() } }
         if (entry.signal !== undefined) controller.abort()
         const prepared = await executable.prepare(args, { cwd, filesystem: hostFileSystem(),
-          signal: controller.signal, env: environmentOf(options.env), output: emit })
+          signal: controller.signal, env: environmentOf(options.env), stdin: child.stdin?.contents() ?? '', output: emit })
         if (prepared.kind === 'exit') {
           emit('stdout', prepared.stdout)
           emit('stderr', prepared.stderr)
@@ -310,6 +310,7 @@ function spawnCommand(
         onOutput: emit,
         onExit: settle,
         ...filesystem === undefined ? {} : { fs: filesystem },
+        ...registry === undefined ? {} : { registry },
       })
       // A signal that arrived while the process was still starting has to reach
       // it now; the table recorded it but had nothing to deliver it to.

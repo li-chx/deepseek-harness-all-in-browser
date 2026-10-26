@@ -32,6 +32,7 @@ export interface VirtualExecutable {
   readonly name: string
   /**
    * Prepare an invocation or complete it without entering the command runner.
+   * Implementations must honor cancellation and settle after their owned effects and cleanup; process exit waits for this promise.
    * @param args - Arguments after the executable path.
    * @param context - Working directory and ambient Worker filesystem.
    * @returns The completed result or delegated command and filesystem.
@@ -39,6 +40,8 @@ export interface VirtualExecutable {
   prepare(
     args: readonly string[],
     context: {
+      /** Standard input forwarded through the shell pipeline or child stdin; omission means no input was supplied. */
+      readonly stdin?: string
       readonly cwd: string
       readonly filesystem: ShellFileSystem
       readonly signal: AbortSignal
@@ -81,6 +84,11 @@ export class VirtualExecutableRegistry {
     this.entries.set(executable.name, executable)
     return () => { this.entries.delete(executable.name) }
   }
+
+  /** List only lifecycle-owned registrations, excluding platform delegators.
+   * @returns A stable snapshot of registered command names.
+   */
+  names(): string[] { return [...this.entries.keys()] }
 
   /** Resolve a scoped or built-in executable.
    * @param path Executable name or absolute virtual path.

@@ -14,6 +14,7 @@ import { OPTIONAL_BUNDLES, PROFILE_TEMPLATES } from '@deepseek-ai/dsh-app-boot'
 import yaml from 'js-yaml'
 import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
 import { HOME_PATCH_PATH, MANIFEST_PATH, packVfsImage } from '../src/pack.ts'
+import { workerAuthoringPrompt } from '../src/worker-authoring.ts'
 import { clientPlatformPackages, installationManifest, platformHomePatch, profileRoster } from '../src/repository.ts'
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -71,10 +72,10 @@ describe('platform home patch', () => {
     expect(patch).toContainEqual({ id: 'hmr', config: { root: ['/virtual/home/profiles/web/plugins'] } })
     expect(patch).toContainEqual({ id: 'harness-dev-context', disabled: true })
     expect(patch.find(row => row.id === 'system-prompt')?.config)
-      .toHaveProperty('personaPrefix', expect.stringContaining('/virtual/home/profiles/web/cordis.patch.yml'))
+      .toHaveProperty('personaPrefix', workerAuthoringPrompt('/virtual', 'web'))
     for (const id of ['preset-standard', 'preset-ptc', 'preset-cordis']) {
       const config: unknown = patch.find(row => row.id === id)?.config
-      expect(JSON.stringify(config)).toContain('/virtual/home/profiles/web/cordis.patch.yml')
+      expect(JSON.stringify(config)).toContain(JSON.stringify(workerAuthoringPrompt('/virtual', 'web')).slice(1, -1))
       expect(JSON.stringify(config)).toContain('You are a coding agent powered by the {{model}} model.')
     }
     expect(patch.some(row => row.id === 'preset-minimal')).toBe(false)

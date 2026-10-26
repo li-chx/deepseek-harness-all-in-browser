@@ -31,6 +31,8 @@ const MAX_SUBSTITUTION_DEPTH = 16
 export interface ShellRunOptions {
   /** Working directory the line starts in. */
   cwd: string
+  /** Host-registered programs available to this shell invocation. */
+  programs?: ReadonlyMap<string, ShellProgram> | undefined
   /** Environment the line starts with. */
   env: Record<string, string>
   /** Standard input contents; absent means empty. */
@@ -80,7 +82,7 @@ export async function runShellCommand(source: string, options: ShellRunOptions):
     run.io.err(`bash: syntax error: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}\n`)
     return run.settle(2)
   }
-  const interpreter = new Interpreter(standardPrograms(), options.fs ?? hostFileSystem(), options.signal)
+  const interpreter = new Interpreter(standardPrograms(options.programs), options.fs ?? hostFileSystem(), options.signal)
   return run.settle(await interpreter.line(line, run.state, run.io))
 }
 
@@ -97,7 +99,7 @@ export async function runShellCommand(source: string, options: ShellRunOptions):
 export async function runShellProgram(argv: readonly string[], options: ShellRunOptions): Promise<ShellRunOutcome> {
   const run = startRun(options)
   const name = argv[0]
-  const program = name === undefined ? undefined : standardPrograms().get(name)
+  const program = name === undefined ? undefined : standardPrograms(options.programs).get(name)
   if (name === undefined || program === undefined) {
     run.io.err(`bash: ${name ?? ''}: command not found\n`)
     return run.settle(NOT_FOUND_STATUS)

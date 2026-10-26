@@ -9,6 +9,7 @@ import { createChildProcessFacade, type WorkerChildProcess } from '../src/node/b
 import { VirtualExecutableRegistry } from '../src/shell/process/virtual-executables.ts'
 import { WorkerModuleLoader } from '../src/module-system/module-loader.ts'
 import { MemoryVfs } from '../src/storage/memory.ts'
+import { hostFileSystem } from '../src/shell/fs-access.ts'
 import { setActiveVfs } from '../src/storage/active.ts'
 
 const cleanups: Array<() => Promise<void>> = []
@@ -36,6 +37,8 @@ function fixture() {
     }],
   }
   const calls: string[] = []
+  const requests: unknown[] = []
+  let rejectBuild = false
   const entered = Promise.withResolvers<undefined>()
   let block = false
   const fetcher: typeof fetch = async (input, init) => {
@@ -47,13 +50,29 @@ function fixture() {
         void resolve
         init?.signal?.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
       })
-      const request = JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as { pluginId: string }
+      const request = JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as { pluginId: string; plugin?: { id: string; name: string; version: string; entry: string; files: Record<string, string> } }
+      requests.push(request)
+      if (rejectBuild) return Response.json({ error: { code: 'COMPILE_FAILED', message: 'source compilation failed' } }, { status: 400 })
+      if (request.plugin !== undefined) {
+        const plugin = request.plugin
+        const packageId = hash(JSON.stringify(plugin))
+        const artifactFiles = Object.entries(plugin.files).map(([path, value]) => {
+          files.set(hash(value), value)
+          return { path, size: Buffer.byteLength(value), sha256: hash(value), objectKey: `${FORGE_GENERATION}/objects/${hash(value)}` }
+        })
+        return Response.json({ protocol: 1, generation: FORGE_GENERATION, revision: packageId, hostPackages: {},
+          plugin: { id: plugin.id, name: plugin.name, version: plugin.version, entry: plugin.entry, packageId },
+          packages: [{ id: packageId, name: plugin.name, version: plugin.version, entry: plugin.entry,
+            dependencies: {}, hostDependencies: [], files: artifactFiles }],
+        })
+      }
       return Response.json({ ...manifest, plugin: { ...manifest.plugin, id: request.pluginId } })
     }
     return new Response(files.get(url.split('/').at(-1) ?? '') ?? '', { status: 200 })
   }
   let active = true
-  const installer = new ForgeInstaller({ vfs, modules, isEntryActive: () => active, isEntryDisabled: () => false, profileDirectory: '/dsh/home/profiles/web',
+  let disabled = false
+  const installer = new ForgeInstaller({ vfs, modules, isEntryActive: () => active, isEntryDisabled: () => disabled, profileDirectory: '/dsh/home/profiles/web',
     hostPackages: { '@deepseek-ai/dsh-app-boot': '0.2.1-rc.3' }, fetch: fetcher, editPatch: editForgeProfilePatch,
     hmr: { runExclusive: async operation => operation(), reconcileProfile: async (ids?: readonly string[]) => {
       if (ids === undefined) active = false
@@ -66,8 +85,10 @@ function fixture() {
   const unregister = [registry.register(commands.dsh), registry.register(commands.which)]
   const facade = createChildProcessFacade(registry)
   cleanups.push(async () => { for (const stop of unregister) stop(); await commands.close(); await installer.close() })
-  return { vfs, modules, installer, commands, facade, calls, entered,
-    setActive: (value: boolean): void => { active = value }, block: (): void => { block = true } }
+  return { vfs, modules, installer, commands, facade, calls, requests, entered,
+    rejectBuild: (): void => { rejectBuild = true },
+    setActive: (value: boolean): void => { active = value },
+    setDisabled: (value: boolean): void => { disabled = value }, block: (): void => { block = true } }
 }
 
 async function completion(child: WorkerChildProcess): Promise<{ code: unknown; signal: unknown; stdout: string; stderr: string }> {
@@ -146,4 +167,158 @@ it('reports a disabled native bundle update as a successful installation', async
   expect(update).toMatchObject({ code: 0, stderr: '' })
   expect(update.stdout).toContain('Installed example (disabled)')
   expect(f.installer.installed().plugins[0]?.status).toBe('disabled')
+})
+
+function seedSource(vfs: MemoryVfs, id = 'source-example', name = 'source-example', value = 1): void {
+  vfs.seed('/dsh/workspace/plugin/forge.json', JSON.stringify({ id, name, version: '1.0.0', entry: 'src/main.ts', files: ['src/main.ts', 'data.json'] }))
+  vfs.seed('/dsh/workspace/plugin/src/main.ts', `exports.name = "source-example"; exports.value = ${value}; exports.apply = () => {}`)
+  vfs.seed('/dsh/workspace/plugin/data.json', '{"selected":true}')
+  vfs.seed('/dsh/workspace/plugin/.env', 'not uploaded')
+  vfs.seed('/dsh/workspace/plugin/unlisted.js', 'not uploaded')
+}
+
+it('builds explicit local files relative to cwd and updates the same source identity', async () => {
+  const f = fixture()
+  seedSource(f.vfs)
+  const built = await completion(f.facade.spawn('dsh', ['plugin', '--profile', 'web', 'build', 'plugin'], { cwd: '/dsh/workspace' }))
+  expect(built).toMatchObject({ code: 0, stderr: '' })
+  expect(built.stdout).toContain('Installed source-example')
+  expect(built.stdout).not.toContain('saved')
+  expect(f.calls[0]).toBe('http://forge.local/v1/builds')
+  expect(f.requests[0]).toEqual({ protocol: 1, generation: FORGE_GENERATION, plugin: {
+    id: 'source-example', name: 'source-example', version: '1.0.0', entry: 'src/main.ts',
+    files: { 'src/main.ts': 'exports.name = "source-example"; exports.value = 1; exports.apply = () => {}', 'data.json': '{"selected":true}' },
+    dependencies: {}, peerDependencies: {},
+  } })
+  expect(f.modules.requireFrom('/dsh/node_modules/loader')('source-example')).toMatchObject({ value: 1 })
+  seedSource(f.vfs, 'source-example', 'source-example', 2)
+  const updated = await completion(f.facade.spawn('dsh', ['plugin', '--profile=web', 'build', '/dsh/workspace/plugin']))
+  expect(updated.code).toBe(0)
+  expect(f.installer.installed().plugins).toHaveLength(1)
+  // The fixture does not run Loader HMR; invalidate its wrapper at the same seam.
+  f.modules.hmrModules.invalidate(['file:///dsh/home/profiles/web/node_modules/source-example/index.js'])
+  expect(f.modules.requireFrom('/dsh/node_modules/loader')('source-example')).toMatchObject({ value: 2 })
+  f.rejectBuild()
+  expect((await completion(f.facade.spawn('dsh', ['plugin', '--profile=web', 'build', '/dsh/workspace/plugin']))).stderr)
+    .toContain('source compilation failed')
+  expect(f.modules.requireFrom('/dsh/node_modules/loader')('source-example')).toMatchObject({ value: 2 })
+})
+
+it('source identity collisions and invalid file selection never request a build', async () => {
+  const f = fixture()
+  seedSource(f.vfs)
+  expect((await completion(f.facade.spawn('dsh', ['plugin', '--profile=web', 'build', '/dsh/workspace/plugin']))).code).toBe(0)
+  for (const [id, name] of [['another-id', 'source-example'], ['source-example', 'another-name']]) {
+    seedSource(f.vfs, id, name)
+    const before = f.calls.length
+    expect((await completion(f.facade.spawn('dsh', ['plugin', '--profile=web', 'build', '/dsh/workspace/plugin']))).code).toBe(1)
+    expect(f.calls).toHaveLength(before)
+  }
+  f.vfs.writeFileSync('/dsh/workspace/plugin/forge.json', JSON.stringify({ id: 'source-example', name: 'source-example',
+    version: '1.0.0', entry: '../secret.ts', files: ['../secret.ts'] }))
+  const before = f.calls.length
+  expect((await completion(f.facade.spawn('dsh', ['plugin', '--profile=web', 'build', '/dsh/workspace/plugin']))).code).toBe(1)
+  expect(f.calls).toHaveLength(before)
+  expect(f.modules.requireFrom('/dsh/node_modules/loader')('source-example')).toMatchObject({ value: 1 })
+})
+
+it('source builds share cancellation and close with published builds', async () => {
+  const f = fixture()
+  seedSource(f.vfs)
+  f.block()
+  const child = f.facade.spawn('dsh', ['plugin', '--profile=web', 'build', '/dsh/workspace/plugin'])
+  const result = completion(child)
+  await f.entered.promise
+  await f.commands.close()
+  expect(await result).toMatchObject({ code: 1 })
+  expect(f.installer.installed().plugins).toEqual([])
+})
+
+it('cancels an asynchronous source read before networking and preserves the installed source plugin', async () => {
+  const f = fixture()
+  seedSource(f.vfs)
+  expect((await completion(f.facade.spawn('dsh', ['plugin', '--profile=web', 'build', '/dsh/workspace/plugin']))).code).toBe(0)
+  const before = f.calls.length
+  const filesystem = hostFileSystem()
+  const readText = filesystem.readText.bind(filesystem)
+  const entered = Promise.withResolvers<undefined>()
+  const released = Promise.withResolvers<undefined>()
+  const cancellation = new AbortController()
+  filesystem.readText = async (path) => {
+    if (path.endsWith('/main.ts')) { entered.resolve(undefined); await released.promise }
+    return readText(path)
+  }
+  const invocation = f.commands.dsh.prepare(['plugin', '--profile=web', 'build', 'plugin'], {
+    cwd: '/dsh/workspace', filesystem, signal: cancellation.signal, env: {}, output: () => {},
+  })
+  await entered.promise
+  cancellation.abort(new Error('source read cancelled'))
+  released.resolve(undefined)
+  expect(await invocation).toMatchObject({ kind: 'exit', exitCode: 1, stderr: 'source read cancelled\n' })
+  expect(f.calls).toHaveLength(before)
+  expect(f.modules.requireFrom('/dsh/node_modules/loader')('source-example')).toMatchObject({ value: 1 })
+})
+
+it('reports disabled source activation separately from failed activation', async () => {
+  const f = fixture()
+  seedSource(f.vfs)
+  f.setActive(false)
+  f.setDisabled(true)
+  const disabled = await completion(f.facade.spawn('dsh', ['plugin', '--profile=web', 'build', '/dsh/workspace/plugin']))
+  expect(disabled).toMatchObject({ code: 0, stderr: '' })
+  expect(disabled.stdout).toContain('Installed source-example (disabled)')
+  f.setDisabled(false)
+  seedSource(f.vfs, 'source-example', 'source-example', 2)
+  const failed = await completion(f.facade.spawn('dsh', ['plugin', '--profile=web', 'build', '/dsh/workspace/plugin']))
+  expect(failed.code).toBe(1)
+  expect(failed.stdout).not.toContain('Installed source-example')
+  expect(f.installer.installed().plugins[0]?.status).toBe('activation-failed')
+})
+
+it('a source command retains its configured endpoint while asynchronous source reading is pending', async () => {
+  const f = fixture()
+  seedSource(f.vfs)
+  const filesystem = hostFileSystem()
+  const readText = filesystem.readText.bind(filesystem)
+  const entered = Promise.withResolvers<undefined>()
+  const released = Promise.withResolvers<undefined>()
+  filesystem.readText = async (path) => {
+    if (path.endsWith('/main.ts')) { entered.resolve(undefined); await released.promise }
+    return readText(path)
+  }
+  const invocation = f.commands.dsh.prepare(['plugin', '--profile=web', 'build', 'plugin'], {
+    cwd: '/dsh/workspace', filesystem, signal: new AbortController().signal, env: {}, output: () => {},
+  })
+  await entered.promise
+  f.commands.configure('http://replacement.local')
+  released.resolve(undefined)
+  expect(await invocation).toMatchObject({ kind: 'exit', exitCode: 0 })
+  expect(f.calls[0]).toBe('http://forge.local/v1/builds')
+  expect(f.calls.every(url => url.startsWith('http://forge.local/'))).toBe(true)
+})
+
+it('the model bash command path builds selected sources through the registered host executable', async () => {
+  const f = fixture()
+  seedSource(f.vfs)
+  const script = 'cd /dsh/workspace && dsh plugin --profile web build plugin | cat > build.log && cat build.log && which ls dsh'
+  const built = await completion(f.facade.spawn('bash', ['-c', script]))
+  expect(built).toMatchObject({ code: 0, stderr: '' })
+  expect(built.stdout).toContain('Installed source-example')
+  expect(built.stdout).toContain('ls: shell built-in command')
+  expect(built.stdout).toContain('dsh: shell built-in command')
+  expect(f.vfs.readFileSync('/dsh/workspace/build.log', 'utf8')).toContain('Installed source-example')
+  expect(f.calls[0]).toBe('http://forge.local/v1/builds')
+  expect(f.modules.requireFrom('/dsh/node_modules/loader')('source-example')).toMatchObject({ value: 1 })
+})
+
+it('interrupting model bash aborts the registered build before it can install', async () => {
+  const f = fixture()
+  seedSource(f.vfs)
+  f.block()
+  const child = f.facade.spawn('bash', ['-c', 'dsh plugin --profile web build /dsh/workspace/plugin'])
+  const result = completion(child)
+  await f.entered.promise
+  child.kill('SIGTERM')
+  expect(await result).toMatchObject({ code: null, signal: 'SIGTERM' })
+  expect(f.installer.installed().plugins).toEqual([])
 })
