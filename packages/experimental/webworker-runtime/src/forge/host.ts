@@ -8,6 +8,9 @@ import { ForgeInstaller, type ForgeInstallerOptions } from './installer.ts'
 import { editForgeProfilePatch } from './profile-patch.ts'
 import { ForgeError, object } from './protocol.ts'
 import { ForgeCommands } from './commands.ts'
+import { AiwHistory } from '../aiw/history.ts'
+import { AiwWorkbench } from '../aiw/workbench.ts'
+import { forgeSharedPackages as installerSharedPackages } from './package-policy.ts'
 
 /** Snapshot package versions before plugin artifacts can be applied.
  * @param vfs Base image filesystem.
@@ -53,14 +56,44 @@ export function createForgeHost(vfs: MemoryVfs, modules: WorkerModuleLoader, pro
   clientPackages: Readonly<Record<string, string>> = {},
   staticSpecifiers: readonly string[] = [],
   restoration: Pick<ForgeInstallerOptions, 'restoredCatalog' | 'withFileBatch'> = {},
-): { installer: ForgeInstaller; commands: ForgeCommands; fetch: (request: Request) => Promise<Response> } {
+): { installer: ForgeInstaller; commands: ForgeCommands; aiw: AiwWorkbench; fetch: (request: Request) => Promise<Response> } {
+  const marker = profileDirectory.indexOf('/home/profiles/')
+  const root = marker < 0 ? profileDirectory.slice(0, profileDirectory.lastIndexOf('/')) : profileDirectory.slice(0, marker)
+  const history = new AiwHistory(vfs, `${root}/home/.aiw`, { hostPackages, clientPackages,
+    sharedPackages: installerSharedPackages(hostPackages, clientPackages, staticSpecifiers) })
+  const cachedFetch: typeof fetch = async (input, init) => {
+    const request = new Request(input, init), url = new URL(request.url)
+    if (url.pathname.startsWith('/v1/artifacts/')) {
+      const bytes = history.object(url.pathname.slice('/v1/artifacts/'.length))
+      if (bytes !== undefined) return new Response(new Uint8Array(bytes))
+      if (url.hostname === 'aiw.local') throw new ForgeError('history-not-found', 'Retained plugin artifact is missing')
+    }
+    return fetcher(request)
+  }
   const installer = new ForgeInstaller({ vfs, modules, profileDirectory, hostPackages, clientPackages, staticSpecifiers,
     ...restoration, hmr, isEntryActive, isEntryDisabled,
-    fetch: fetcher, editPatch: editForgeProfilePatch })
+    beforeApply: (manifest, artifacts) => {
+      const previous = installer.snapshot(manifest.plugin.id)
+      if (previous !== undefined) history.capture(previous.manifest, previous.artifacts)
+      history.capture(manifest, artifacts)
+    },
+    fetch: cachedFetch, editPatch: editForgeProfilePatch })
   installer.finishRestore()
-  const commands = new ForgeCommands(installer, basename(profileDirectory), fetcher)
+  installer.subscribe((event) => { if (event.phase === 'activation' && event.status !== undefined) history.mark({ pluginId: event.pluginId, revision: event.revision, status: event.status }) })
+  const commands = new ForgeCommands(installer, basename(profileDirectory), fetcher, (manifest, source, directory) => {
+    history.stageSource(manifest.revision, { directory, files: { ...source.files,
+      'forge.json': JSON.stringify({ ...source, files: Object.keys(source.files) }, null, 2) + '\n' } })
+    return () => { history.unstage(manifest.revision) }
+  })
+  const settingsPath = `${root}/home/.aiw/settings.json`
+  if (vfs.existsSync(settingsPath)) {
+    const settings = object(JSON.parse(vfs.readFileSync(settingsPath, 'utf8') as string))
+    if (settings.schema !== 1) throw new ForgeError('invalid-settings', 'Saved AIW settings schema is invalid')
+    commands.configure(settings.baseUrl)
+  }
+  const aiw = new AiwWorkbench(vfs, root, profileDirectory, installer, commands, history)
   return {
-    installer, commands,
+    installer, commands, aiw,
     fetch: async (request) => {
       try {
         const path = new URL(request.url).pathname

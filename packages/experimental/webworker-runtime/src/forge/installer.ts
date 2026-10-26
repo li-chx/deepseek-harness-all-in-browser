@@ -9,27 +9,8 @@ import type { WorkerModuleLoader } from '../module-system/module-loader.ts'
 import { dirname, join, pathToFileUrl } from '../module-system/posix-path.ts'
 import { ForgeError, FORGE_GENERATION, parseForgeManifest, pluginId, object, type ForgeManifest, type ForgePackage } from './protocol.ts'
 
-/** The current activation outcome; files may exist even when activation failed. */
-export interface ForgeInstalled {
-  pluginId: string
-  revision: string
-  name: string
-  version: string
-  status: 'active' | 'disabled' | 'activation-failed'
-  message?: string
-}
-
-/** One update's separate application and activation facts. */
-export interface ForgeResult {
-  protocol: 1
-  pluginId: string
-  revision: string
-  status: 'active' | 'disabled' | 'removed' | 'activation-failed'
-  downloadedFiles: number
-  writtenFiles: number
-  observerErrors: string[]
-  message?: string
-}
+export type { ForgeInstalled, ForgeResult } from './protocol.ts'
+import type { ForgeInstalled, ForgeResult } from './protocol.ts'
 
 /** Batch phases annotate ordinary VFS notifications; none implies persistence. */
 export interface ForgeBatchEvent {
@@ -44,6 +25,8 @@ export interface ForgeBatchEvent {
 export interface ForgeInstallerOptions {
   /** Catalog validated before profile boot; activation is read from the new Loader. */
   restoredCatalog?: ForgeCatalog
+  /** Retain verified artifacts before any live profile mutation or obsolete-file collection. */
+  beforeApply?: (manifest: ForgeManifest, artifacts: ReadonlyMap<string, Uint8Array>) => void
   /** Synchronous durable transaction grouping; never await inside the callback. */
   withFileBatch?: (operation: () => void) => void
   vfs: MemoryVfs
@@ -118,6 +101,22 @@ export class ForgeInstaller {
   installed(): { protocol: 1; generation: string; plugins: ForgeInstalled[]; batches: ForgeBatchEvent[] } {
     return { protocol: 1, generation: FORGE_GENERATION,
       plugins: [...this.states.values()].map(state => this.currentState(state)), batches: [...this.batches.values()] }
+  }
+
+  /** Read an installed plan and verified bytes for retaining an existing installation.
+   * @param id Plugin identifier.
+   * @returns Snapshot when installed, otherwise undefined.
+   */
+  snapshot(id: string): { manifest: ForgeManifest; artifacts: Map<string, Uint8Array> } | undefined {
+    const manifest = this.manifests.get(pluginId(id))
+    if (manifest === undefined) return undefined
+    const artifacts = new Map<string, Uint8Array>()
+    for (const pkg of manifest.packages) for (const file of pkg.files) {
+      const bytes = this.options.vfs.readFileSync(join(this.packageDirectory(pkg.id), file.path)) as Uint8Array
+      if (bytes.byteLength !== file.size || digest(bytes) !== file.sha256) throw new ForgeError('integrity-failed', `Installed artifact verification failed for ${file.path}`)
+      artifacts.set(file.sha256, bytes)
+    }
+    return { manifest, artifacts }
   }
 
   /** Observe file application and activation independently from persistence.
@@ -326,7 +325,8 @@ export class ForgeInstaller {
    * @param value Untrusted manifest JSON.
    * @param baseUrl Forge service URL used only for its artifact route.
    * @param signal Cancels before application when supplied; omission runs without cancellation. Committed batches finish reconciliation.
-   * @returns Committed file counts and activation outcome; preflight failures reject without writes.
+   * @returns Committed file counts and activation outcome. Preflight failures leave the selected profile unchanged;
+   * verified history objects may be retained before application.
    */
   install(value: unknown, baseUrl: string, signal?: AbortSignal): Promise<ForgeResult> {
     return this.serial(async () => {
@@ -381,6 +381,16 @@ export class ForgeInstaller {
             result.downloadedFiles++
           }
         }
+      }
+      if (this.options.beforeApply !== undefined) {
+        const artifacts = new Map<string, Uint8Array>()
+        for (const pkg of manifest.packages) for (const file of pkg.files) {
+          const bytes = prepared.get(file.sha256)
+            ?? this.options.vfs.readFileSync(join(this.packageDirectory(pkg.id), file.path)) as Uint8Array
+          if (bytes.byteLength !== file.size || digest(bytes) !== file.sha256) throw new ForgeError('integrity-failed', `Artifact verification failed for ${file.path}`)
+          artifacts.set(file.sha256, bytes)
+        }
+        this.options.beforeApply(manifest, artifacts)
       }
       const bundle = this.bundleEntry(manifest, prepared)
       return this.options.hmr.runExclusive(async () => {
@@ -471,6 +481,8 @@ export class ForgeInstaller {
       const id = pluginId(value)
       const manifest = this.manifests.get(id)
       if (manifest === undefined) throw new ForgeError('not-installed', `Plugin ${id} is not installed`)
+      const snapshot = this.snapshot(id)
+      if (snapshot !== undefined) this.options.beforeApply?.(snapshot.manifest, snapshot.artifacts)
       const patch = this.patch(id, undefined)
       const profilePackage = this.profileDependency(manifest.plugin.name, undefined,
         this.bundleEntry(manifest) === undefined ? undefined : false)

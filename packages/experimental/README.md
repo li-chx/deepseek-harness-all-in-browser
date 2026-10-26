@@ -82,6 +82,7 @@ Promotion requires a named product role, documented public behavior and limitati
 | [`tool-worktree`](tool-worktree/README.md) | Optional bundle and model tool for creating and entering worktrees | `ctx.tools` |
 | [`webworker-packer`](webworker-packer/README.md) | Builds the gzip-compressed VFS image consumed by the browser worker preview | library and CLI — no ctx key |
 | [`webworker-runtime`](webworker-runtime/README.md) | Runs the harness plugin tree inside a dedicated browser worker | library and worker entry — no ctx key |
+| [`client-ui-aiw`](client-ui-aiw/README.md) | Worker-local plugin projects, files, revision recovery and portable backups | — |
 | [`worktree`](worktree/README.md) | Creates a named Git worktree and changes the calling Session directory | `ctx.worktrees` |
 
 -----

@@ -29,7 +29,7 @@ describe('profile roster', () => {
       '@deepseek-ai/dsh-plugin-manager', '@deepseek-ai/dsh-host-webserver',
       // Rows inserted by optional bundles, including grouped ones.
       '@deepseek-ai/dsh-session-title-all-prompts-llm', '@deepseek-ai/dsh-experimental-inspector',
-      '@deepseek-ai/dsh-tool-session-query',
+      '@deepseek-ai/dsh-tool-session-query', '@deepseek-ai/dsh-experimental-client-ui-aiw',
     ]))
     expect(new Set(roster).size).toBe(roster.length)
     expect(roster.every(name => name.startsWith('@') || !name.includes('/'))).toBe(true)
@@ -70,6 +70,7 @@ describe('platform home patch', () => {
   it('uses the mounted root for plugin watching and guidance and disables Node checkout instructions', () => {
     const patch = platformHomePatch(repoRoot, 'web', '/virtual')
     expect(patch).toContainEqual({ id: 'hmr', config: { root: ['/virtual/home/profiles/web/plugins'] } })
+    expect(patch).toContainEqual({ insert: [{ id: 'dsh-aiw', name: '@deepseek-ai/dsh-experimental-client-ui-aiw' }] })
     expect(patch).toContainEqual({ id: 'harness-dev-context', disabled: true })
     expect(patch).toContainEqual({ id: 'tool-fs-search', disabled: true })
     expect(patch.find(row => row.id === 'system-prompt')?.config)

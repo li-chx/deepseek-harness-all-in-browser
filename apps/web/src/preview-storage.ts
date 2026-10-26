@@ -33,8 +33,6 @@ export function previewStorageOptions(page: URL, image: URL, overlays: readonly 
 
 /** A normal-flow toolbar that keeps persistence failures visible above the application. */
 export interface PreviewStorageUi {
-  /** Parent for the existing Forge launcher, outside the application’s menus. */
-  readonly actions: HTMLElement
   /** Observe live commits after boot; status before boot remains a loading state. */
   connect(connection: WorkerHostConnection): void
   /** Report failed boot without replacing or clearing durable records. */
@@ -112,7 +110,6 @@ export function mountPreviewStorage(): PreviewStorageUi {
     })
   }, options)
   return {
-    actions,
     connect(value) {
       connection = value
       release = value.tunnel.subscribeStorageStatus(render)

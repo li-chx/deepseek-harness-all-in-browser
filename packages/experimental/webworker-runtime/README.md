@@ -14,6 +14,7 @@ The browser worker host: the whole harness plugin tree runs inside one dedicated
 ## Table of Contents
 
 - [Use this package](#use-this-package)
+- [AIW workbench](#aiw-workbench)
 - [Browser persistence](#browser-persistence)
 - [Forge plugin updates](#forge-plugin-updates)
 - [Outbound HTTP providers](#outbound-http-providers)
@@ -43,6 +44,17 @@ Acceptance lives in `apps/web/tests/preview-boot.e2e.ts`, which serves the real 
 The [built-bundle import sweep](tests/compile/transform-corpus-check.ts) checks bare Node imports after the library build. Its Dockkit exception accepts Node’s unknown-`.css`-extension refusal for any stylesheet rather than one pinned path; another extension, error code, or message, and an unexpectedly successful exempt import, remain errors.
 
 -----
+
+<a id="aiw-workbench"></a>
+## AIW workbench
+
+The Worker-local `/__aiw/status` and `/__aiw/action` endpoints support the AIW management page. Files and source projects remain in the VFS. Text edits require the digest of the last observed contents before overwriting an existing file; new-file writes never replace an existing file. The editor accepts UTF-8 files up to 1 MiB. Application profiles, Session files, credential paths, immutable artifacts and the internal history store cannot be mutated through these operations. Base packages can be browsed read-only. File operations and the limited command line share these access rules; hard-linked aliases are rejected.
+
+Plugin installs retain verified, content-addressed artifact bytes before replacement or garbage collection, including installs and removals initiated through the existing CLI. Source builds also retain the exact selected sources and normalized descriptor. History survives with the existing home-directory persistence provider. A revision records its actual Host activation outcome separately; retained code does not establish Client activation. Restoring uses the ordinary integrity checks, installer and HMR queue and can work with Forge offline. A plugin installed before workbench history exists has no earlier source snapshot; its current artifacts are captured before replacement or removal.
+
+File backups preserve original binary bytes and directories, validate every path and digest before mutation, and import only into an empty workspace subdirectory. Plugin backups include a manifest, verified artifact objects and optional source. Imported plugin source is written to a new workspace directory rather than overwriting an existing project. Backup limits are 1,000 files and 32 MiB; protected credential files and internal caches are excluded. These backups cover selected files or plugin projects, not a live whole-profile or Session-state restoration.
+
+The command line runs the existing VFS shell and virtual `dsh`, without OS processes or a Node package manager. Each request starts in its selected working directory, has a 30-second deadline and a 1 MiB output limit, and is cancelled when the workbench closes. Commands can report nonzero exit codes inside a successful HTTP response. Saving files or restoring a plugin does not itself confirm browser persistence; use the storage flush action before closing the page.
 
 <a id="browser-persistence"></a>
 ## Browser persistence

@@ -216,6 +216,7 @@
     "tests/workflow-run.e2e.ts"
   ],
   "references": [
+    { "path": "../../packages/experimental/webworker-runtime" },
     { "path": "../../packages/experimental/auto-review" },
     {
       "path": "../../packages/client/store"

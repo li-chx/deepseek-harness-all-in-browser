@@ -331,6 +331,12 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
           localRoutes.set(path, forgeFetch)
         }
       }
+      const aiw = forge?.aiw
+      const aiwFetch = aiw === undefined ? undefined : (request: Request): Promise<Response> => aiw.fetch(request)
+      if (aiwFetch !== undefined) {
+        localRoutes.set('/__aiw/status', aiwFetch)
+        localRoutes.set('/__aiw/action', aiwFetch)
+      }
       const storageFetch = async (request: Request): Promise<Response> => {
         const path = new URL(request.url).pathname
         if (!((path === '/__storage/status' && request.method === 'GET') || (path === '/__storage/flush' && request.method === 'POST'))) {
@@ -370,6 +376,7 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       http.close()
       tunnel.fail(new Error('webworker host: the tree was disposed'))
       try {
+        await forge?.aiw.close()
         await forge?.commands.close()
         await forge?.installer.close()
         await context?.fiber.dispose()

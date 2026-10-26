@@ -233,3 +233,25 @@ function parseExports(value: unknown, subpaths = true): ForgePackageExports {
     return [key, parseExports(child, false)]
   }))
 }
+
+/** The current activation outcome; files may exist even when activation failed. */
+export interface ForgeInstalled {
+  pluginId: string
+  revision: string
+  name: string
+  version: string
+  status: 'active' | 'disabled' | 'activation-failed'
+  message?: string
+}
+
+/** One update's separate application and activation facts. */
+export interface ForgeResult {
+  protocol: 1
+  pluginId: string
+  revision: string
+  status: 'active' | 'disabled' | 'removed' | 'activation-failed'
+  downloadedFiles: number
+  writtenFiles: number
+  observerErrors: string[]
+  message?: string
+}

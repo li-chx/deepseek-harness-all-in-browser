@@ -11,7 +11,7 @@ it('passes unrelated, cross-origin and lookalike paths to the previous fetch unc
   const host = vi.fn(async () => new Response('host'))
   vi.stubGlobal('fetch', native)
   release = forwardWorkerHostRequests(host)
-  for (const path of ['/assets/app.js', '/api-other/test', '/api%2Ftest', 'https://example.org/api/test', '/dsh-plugin-hub-other', '/dsh-plugin-hub%2Fenv', 'https://example.org/dsh-plugin-hub/env']) {
+  for (const path of ['/assets/app.js', '/api-other/test', '/__aiw-other', '/__aiw%2Faction', 'https://example.org/__aiw/action', '/api%2Ftest', 'https://example.org/api/test', '/dsh-plugin-hub-other', '/dsh-plugin-hub%2Fenv', 'https://example.org/dsh-plugin-hub/env']) {
     const init = { headers: { 'x-test': 'native' } }
     expect(await (await fetch(path, init)).text()).toBe('native')
     expect(native).toHaveBeenLastCalledWith(path, init)
@@ -19,7 +19,7 @@ it('passes unrelated, cross-origin and lookalike paths to the previous fetch unc
   expect(host).not.toHaveBeenCalled()
 })
 
-it.each(['/dsh-plugin-hub/install', '/api/mobile-nav.session.delete'])(
+it.each(['/dsh-plugin-hub/install', '/api/mobile-nav.session.delete', '/__aiw/action', '/__forge/configure', '/__storage/flush'])(
   'retains Request and init semantics and does not retry %s 404 on the static server', async (path) => {
     const native = vi.fn(async () => new Response('native'))
     let captured: RequestInit | undefined

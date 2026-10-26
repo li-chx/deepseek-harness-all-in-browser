@@ -36,7 +36,7 @@ VFS 镜像打包器：把一份随附 profile 的 bundle 和安装提供的 opti
 
 `repository.ts` 拥有仓库形态输入（`vendor/`、`packages/`、`native/system/packages/` 与 `apps/` 的 workspace 扫描；经 app-boot 的随附模板、optional bundle 列表和 bundle patch 读取器得出 profile roster；以 CLI manifest 作为安装清单；home patch 在模板各 bundle 层合成出的行配置之上设置运行时 `PLATFORM_ENTRY_CONFIG` 字段）；`pack.ts` 一概不拥有，同一库换参即可打另一棵树。Native 扫描使 Landlock 入口包成为普通发布视图依赖，其可执行文件仍由 Worker 平台实现。CLI 为 `dsh-pack-vfs-image --out <file> [--profile web]`；它把懒加载归档写在基础镜像旁，`apps/web` 的 `build:preview` 在预览壳构建后运行它。
 
-仓库镜像的 home patch 还安装 Worker 环境指引和 profile 的 `plugins/` 目录 HMR 监视，并禁用 Node checkout 的 `harness-dev-context` 以及基础组合和出货 preset 中依赖原生 ripgrep 的工具。模型可通过 Forge 构建 Host 与 Client 源码，或直接编辑 CommonJS Host 插件来触发替换。Forge 源码描述符可以指定 Client 入口；自定义插件清单显示资源导出仍不受支持。文件持久化取决于页面配置的存储 provider。开发技能根据部署环境选择安装流程。
+仓库镜像在“插件”下方提供 `dsh-aiw` Client 管理页面。其标记插件通过仅属于 Worker 的 home patch 行挂载，与出货的 Node profile 独立。仓库镜像的 home patch 还安装 Worker 环境指引和 profile 的 `plugins/` 目录 HMR 监视，并禁用 Node checkout 的 `harness-dev-context` 以及基础组合和出货 preset 中依赖原生 ripgrep 的工具。模型可通过 Forge 构建 Host 与 Client 源码，或直接编辑 CommonJS Host 插件来触发替换。Forge 源码描述符可以指定 Client 入口；自定义插件清单显示资源导出仍不受支持。文件持久化取决于页面配置的存储 provider。开发技能根据部署环境选择安装流程。
 
 仓库适配器还声明 `webworker-runtime/tests/fixtures/` 下仅用于 preview 的 fixture（测试前置数据） tree。CLI 会把每套具名 fixture 打成一份独立的确定性 overlay 归档，并写出浏览器可读的 manifest（元数据清单）。Overlay 文件绕过 npm 发布视图和模块可达性排除规则，因此点目录与示例源码会完整保留；其挂载位置仅限 `home/` 与 `workspace/`。`packVfsOverlay` 将所有文件视为不透明字节。
 
@@ -59,6 +59,7 @@ VFS 镜像打包器：把一份随附 profile 的 bundle 和安装提供的 opti
 You are running inside the DeepSeek Harness browser Worker preview. Files belong to its virtual filesystem, not the user's computer. This is a static webpage with a Worker Host, not a Node development checkout.
 
 Environment:
+- The dsh-aiw sidebar page manages source projects, files, limited VFS commands and retained plugin revisions. Its backups cover selected file trees or plugin artifacts/sources, not a live whole-profile or Session restore. Forge builds and removals retain artifact history; use the page to inspect and restore a revision, then verify actual behavior and explicit save.
 - The mounted root is "/dsh"; the profile patch is "/dsh/home/profiles/web/cordis.patch.yml". Use pwd to locate the session workspace. Prefer read, write and edit tools for source and configuration.
 - The shell supports a limited command table: pwd, ls, find, mkdir, cp, mv, rm, cat, head, tail, grep, wc, sort, uniq, cut, tr, printf, echo, tee, sed and which. Options are limited; sed supports substitution only. There is no local node, npm, pnpm, npx, tsc, git, python, rg, jq or wget. Do not start local compilers, development servers, shell loops or heredocs.
 - Native ripgrep-backed grep/glob tools are disabled in the shipped Worker presets. Search a known directory with shell find or grep; prefer read with line limits for file excerpts. Shell grep uses JavaScript regular expressions or -F literals, not POSIX basic regex; use a|b, not escaped alternation. It does not implement -o. head/tail support -n, not -c; sed does not support line-address scripts. Never treat an unsupported option or a failed tool as proof that content is absent.

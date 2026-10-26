@@ -2,7 +2,9 @@
 import { sha256 } from '@noble/hashes/sha2.js'
 import type { ForgeInstaller } from './installer.ts'
 import { ForgeError, object, parseForgeManifest } from './protocol.ts'
-import { readForgeSource } from './source.ts'
+import { readForgeSource, type ForgeSourcePlugin } from './source.ts'
+import type { ForgeManifest } from './protocol.ts'
+import { resolve } from '../module-system/posix-path.ts'
 import type { VirtualExecutable, VirtualExecutableExit } from '../shell/process/virtual-executables.ts'
 
 function exit(exitCode: number, stdout = '', stderr = ''): VirtualExecutableExit {
@@ -22,7 +24,13 @@ export class ForgeCommands {
   private readonly cancellations = new Set<AbortController>()
   private closing = false
 
-  constructor(private readonly installer: ForgeInstaller, private readonly profile: string, private readonly fetcher: typeof fetch) {}
+  constructor(private readonly installer: ForgeInstaller, private readonly profile: string, private readonly fetcher: typeof fetch,
+    private readonly onSource?: (manifest: ForgeManifest, source: ForgeSourcePlugin, directory: string) => (() => void) | void) {}
+
+  /** Current endpoint selected by the page; no credential contents are exposed.
+   * @returns Validated URL when configured, otherwise undefined.
+   */
+  endpoint(): string | undefined { return this.baseUrl }
 
   /** Set the build endpoint for subsequent commands; in-flight commands retain their endpoint.
    * @param value HTTP service URL supplied by the page.
@@ -113,6 +121,7 @@ export class ForgeCommands {
       throw new ForgeError(typeof failure.code === 'string' ? failure.code : 'build-failed', typeof failure.message === 'string' ? failure.message : 'Forge build failed')
     }
     signal.throwIfAborted()
+    let releaseSource: (() => void) | undefined
     if (source !== undefined) {
       const target = this.installer.target()
       const manifest = parseForgeManifest(payload, target.hostPackages, target.clientPackages, target.sharedPackages)
@@ -135,11 +144,15 @@ export class ForgeCommands {
           throw new ForgeError('build-client-mismatch', 'Forge returned no included ./client export for the requested Client module')
         }
       }
+      const release = this.onSource?.(manifest, source, resolve(context.cwd, spec))
+      if (typeof release === 'function') releaseSource = release
     }
-    const result = await this.installer.install(payload, base, signal)
-    signal.throwIfAborted()
-    return result.status === 'active' || result.status === 'disabled'
-      ? exit(0, `Installed ${name}${result.status === 'disabled' ? ' (disabled)' : ''}\n${result.message ?? ''}`) : exit(1, '', `${result.message ?? 'Plugin activation failed'}\n`)
+    try {
+      const result = await this.installer.install(payload, base, signal)
+      signal.throwIfAborted()
+      return result.status === 'active' || result.status === 'disabled'
+        ? exit(0, `Installed ${name}${result.status === 'disabled' ? ' (disabled)' : ''}\n${result.message ?? ''}`) : exit(1, '', `${result.message ?? 'Plugin activation failed'}\n`)
+    } finally { releaseSource?.() }
   }
 
   /** Cancel network work and wait until accepted commands settle before disposing the host.

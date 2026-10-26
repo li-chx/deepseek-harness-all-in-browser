@@ -23,6 +23,10 @@ export { WorkerHttpTransport, type HttpTransport, type HttpFetch } from '../tran
 export { WorkerTunnel, type TunnelFetch } from './client.ts'
 export { applyIndexInjections } from './apply-injections.ts'
 export { parseStorageStatus, type TunnelStorageInit } from '../transport/frames.ts'
+export type {
+  AiwAction, AiwResponse, AiwStatus, AiwProject, AiwFileEntry, AiwHistoryVersion, AiwCommandResult,
+  AiwImportPreview, AiwArchive, AiwFilesArchive, AiwPluginArchive, AiwSourceSnapshot,
+} from '../aiw/protocol.ts'
 export type { VfsPersistenceStatus } from '../storage/persistence-types.ts'
 export { IMAGE_FILE_NAME } from '../image-layout.ts'
 export {

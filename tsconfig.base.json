@@ -28,6 +28,8 @@
     // not declaration path aliases, keep each package/vendor source compiled
     // under its own tsconfig boundary.
     "paths": {
+      "@deepseek-ai/dsh-experimental-client-ui-aiw": ["./packages/experimental/client-ui-aiw/src/index.ts"],
+      "@deepseek-ai/dsh-experimental-client-ui-aiw/client": ["./packages/experimental/client-ui-aiw/src/client/index.ts"],
       "@deepseek-ai/dsh-experimental-session-search": ["./packages/experimental/session-search/src/index.ts"],
       "@deepseek-ai/dsh-experimental-ralph-bundle": ["./packages/experimental/ralph-bundle/src/index.ts"],
       "@deepseek-ai/dsh-experimental-terminal-bundle": ["./packages/experimental/terminal-bundle/src/index.ts"],
@@ -345,6 +347,7 @@
       "@deepseek-ai/dsh-experimental-worktree": ["./packages/experimental/worktree/src"],
       "@deepseek-ai/dsh-experimental-tool-worktree": ["./packages/experimental/tool-worktree/src"],
       "@deepseek-ai/dsh-experimental-webworker-runtime": ["./packages/experimental/webworker-runtime/src"],
+      "@deepseek-ai/dsh-experimental-webworker-runtime/client": ["./packages/experimental/webworker-runtime/src/client/index.ts"],
       "@deepseek-ai/dsh-experimental-webworker-packer": ["./packages/experimental/webworker-packer/src"],
       "@deepseek-ai/dsh-experimental-inspector": ["./packages/experimental/inspector/src"],
       "@deepseek-ai/dsh-experimental-inspector-profile": ["./packages/experimental/inspector-profile/src"],

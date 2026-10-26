@@ -32,6 +32,9 @@ const WORKSPACE_SCAN_ROOTS = ['vendor', 'packages', 'native/system/packages', 'a
 /** The `dsh` installation package: its manifest anchors bundle resolution, as the launcher's does. */
 const CLI_PACKAGE = 'apps/cli'
 
+/** The preview's own management page is independent of the shipped Node profile. */
+const WORKER_UI_PACKAGE = '@deepseek-ai/dsh-experimental-client-ui-aiw'
+
 /** Diagnostic prefix for the app-boot readers this module calls. */
 const BIN_NAME = 'dsh-pack-vfs-image'
 
@@ -112,6 +115,7 @@ export function profileRoster(repoRoot: string, profile: string): ProfileRoster 
   const bundles = [...new Set([...template.bundles, ...OPTIONAL_BUNDLES])]
   const names = new Set<string>(bundles)
   for (const bundle of bundles) collectModuleNames(bundlePatches(repoRoot, bundle), names)
+  if (profile === 'web') names.add(WORKER_UI_PACKAGE)
   return { bundles, roster: [...names] }
 }
 
@@ -156,6 +160,7 @@ export function platformHomePatch(repoRoot: string, profile: string, root = DEFA
   }
   if (findRow(composed, 'harness-dev-context') !== undefined) patches.push({ id: 'harness-dev-context', disabled: true })
   if (findRow(composed, 'tool-fs-search') !== undefined) patches.push({ id: 'tool-fs-search', disabled: true })
+  if (profile === 'web') patches.push({ insert: [{ id: 'dsh-aiw', name: WORKER_UI_PACKAGE }] })
   return patches
 }
 

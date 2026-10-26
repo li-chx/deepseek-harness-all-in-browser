@@ -12,7 +12,7 @@ export function forwardWorkerHostRequests(hostFetch: TunnelFetch): () => void {
   const forwarded: typeof fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), document.baseURI)
     const hostRoute = url.origin === location.origin
-      && (url.pathname.startsWith('/api/') || url.pathname === '/dsh-plugin-hub' || url.pathname.startsWith('/dsh-plugin-hub/'))
+      && (url.pathname.startsWith('/__aiw/') || url.pathname.startsWith('/__forge/') || url.pathname.startsWith('/__storage/') || url.pathname.startsWith('/api/') || url.pathname === '/dsh-plugin-hub' || url.pathname.startsWith('/dsh-plugin-hub/'))
     if (!active || !hostRoute) return previous(input, init)
     const request = new Request(input instanceof Request ? input : url, init)
     request.signal.throwIfAborted()
