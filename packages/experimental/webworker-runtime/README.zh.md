@@ -67,7 +67,7 @@ Worker 本地的 `/__aiw/status` 与 `/__aiw/action` 端点支持 AIW 管理页�
 
 Forge 清单记录已应用的 manifests 和保留产物的所有权，与激活结果独立。安装在等待 Cordis 协调前，将代码、生成的包元数据、Profile 注册及清单纳入一次同步持久化批次。删除先取消选择并卸载插件，再将文件回收与清单删除组合提交。新 Worker 在 Profile 合成前校验已保存产物并恢复按引用方解析的映射，随后由原生 Loader 状态决定激活结果。因此已安装包可在不联系 Forge 的情况下启动；基础镜像与页面仍需各自的静态资源。对应操作由 [forge/catalog.ts](src/forge/catalog.ts) 和 [storage/persistence.ts](src/storage/persistence.ts) 中的清单与控制器实现负责。
 
-当前提供者使用浏览器本地存储，不实现原生 RPC 存储、云端同步、导出备份或跨标签页合并。清除站点数据会删除存储，配额和存储回收由浏览器管理。`createWorkerHost` 调用方通过 `persistence` 传入控制器来启用；未传入时，宿主保持临时模式。控制器拥有提供者直至释放，在宿主销毁后结算排队写入并关闭提供者。
+当前提供者使用浏览器本地存储，不实现原生 RPC 存储、云端同步或跨标签页合并。文件及插件归档操作由 [AIW 工作台](#aiw-workbench)负责。清除站点数据会删除存储，配额和存储回收由浏览器管理。`createWorkerHost` 调用方通过 `persistence` 传入控制器来启用；未传入时，宿主保持临时模式。控制器拥有提供者直至释放，在宿主销毁后结算排队写入并关闭提供者。
 
 -----
 

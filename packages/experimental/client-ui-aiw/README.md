@@ -35,6 +35,8 @@ The Worker image includes this marker plugin and discovers its Client entry thro
 | Backups | Download a file-tree or plugin-revision JSON archive; preview file imports before restoring into an empty directory, or confirm a plugin import through the installer. |
 | Settings | Configure the Forge endpoint and inspect the generation, workspace and profile paths. |
 
+To update a source plugin, edit it through **Open source**, use **Save file**, and then **Build project**. **Save file** writes the editor draft to the VFS; building compiles those saved files and applies the plugin update. **Save now** confirms browser persistence after you verify the result; it does not save an open editor draft or rebuild source.
+
 Build results establish Host activation only. Verify a Client component separately in the running page. The official Plugins page retains its installation controls during this transition; the temporary npm form here can be removed after those controls use the Worker installer.
 
 Use **Save now** beside the page title before closing the browser. The workbench shows acknowledged browser-storage status; terminal storage and startup failures also remain visible outside the page. The storage provider owns persistence; the page does not turn an unconfirmed operation into a saved result.
@@ -75,7 +77,7 @@ None directly; request construction and model-visible effects of installed plugi
 
 - Backups cover selected readable file trees or complete retained plugin revisions; protected credential files are excluded, and imports do not replace the active profile or Session database.
 - The shell is a bounded virtual command table, not an OS terminal. Each invocation starts in its selected directory.
-- Local drafts survive navigation in the current page, but must be saved before a reload. File conflicts retain the draft rather than overwriting another writer.
+- Local drafts survive navigation in the current page. Use **Save file** to write a draft, then **Save now** before a reload. File conflicts retain the draft rather than overwriting another writer.
 
 -----
 
