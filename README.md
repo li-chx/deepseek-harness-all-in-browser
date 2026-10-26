@@ -1,8 +1,8 @@
-# DeepSeek Harness
+# DeepSeek Harness AIB
 
 English | [中文](README.zh.md)
 
-DeepSeek Harness (`dsh`) is an open-source agent harness developed by [DeepSeek AI](https://deepseek.com).
+DeepSeek Harness AIB (**All in Browser**) is a browser-focused [fork](https://github.com/li-chx/deepseek-harness-all-in-browser) of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), the open-source agent harness developed by [DeepSeek AI](https://deepseek.com). The [Worker runtime](packages/experimental/webworker-runtime/README.md) runs the Host in the browser; the **dsh-aib** workbench manages virtual files, plugin projects and saved revisions. See the [VFS packer](packages/experimental/webworker-packer/README.md) for browser deployment.
 
 It is built on an **everything-is-a-plugin** architecture and powered by [Cordis](https://github.com/cordiverse/cordis), whose design is described in [_A Programming Paradigm for Spatiotemporal Composability_](https://arxiv.org/abs/2608.25512).
 
@@ -31,8 +31,8 @@ The command starts the Web UI at `http://127.0.0.1:3080` by default and opens it
 To run from a repository checkout:
 
 ```sh
-git clone https://github.com/deepseek-ai/deepseek-harness.git
-cd deepseek-harness
+git clone https://github.com/li-chx/deepseek-harness-all-in-browser.git
+cd deepseek-harness-all-in-browser
 pnpm install
 pnpm run build
 pnpm dsh web

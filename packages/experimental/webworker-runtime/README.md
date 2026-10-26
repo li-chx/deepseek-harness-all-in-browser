@@ -14,7 +14,7 @@ The browser worker host: the whole harness plugin tree runs inside one dedicated
 ## Table of Contents
 
 - [Use this package](#use-this-package)
-- [AIW workbench](#aiw-workbench)
+- [AIB workbench](#aiw-workbench)
 - [Browser persistence](#browser-persistence)
 - [Forge plugin updates](#forge-plugin-updates)
 - [Outbound HTTP providers](#outbound-http-providers)
@@ -47,9 +47,9 @@ The [built-bundle import sweep](tests/compile/transform-corpus-check.ts) checks 
 -----
 
 <a id="aiw-workbench"></a>
-## AIW workbench
+## AIB workbench
 
-The Worker-local `/__aiw/status` and `/__aiw/action` endpoints support the AIW management page. Files and source projects remain in the VFS. Text edits require the digest of the last observed contents before overwriting an existing file; new-file writes never replace an existing file. The editor accepts UTF-8 files up to 1 MiB. Application profiles, Session files, credential paths, immutable artifacts and the internal history store cannot be mutated through these operations. Base packages can be browsed read-only. File operations and the limited command line share these access rules; hard-linked aliases are rejected.
+The Worker-local `/__aiw/status` and `/__aiw/action` endpoints support the AIB management page. Files and source projects remain in the VFS. Text edits require the digest of the last observed contents before overwriting an existing file; new-file writes never replace an existing file. The editor accepts UTF-8 files up to 1 MiB. Application profiles, Session files, credential paths, immutable artifacts and the internal history store cannot be mutated through these operations. Base packages can be browsed read-only. File operations and the limited command line share these access rules; hard-linked aliases are rejected.
 
 Plugin installs retain verified, content-addressed artifact bytes before replacement or garbage collection, including installs and removals initiated through the existing CLI. Source builds also retain the exact selected sources and normalized descriptor. History survives with the existing home-directory persistence provider. A revision records its actual Host activation outcome separately; retained code does not establish Client activation. Restoring uses the ordinary integrity checks, installer and HMR queue and can work with Forge offline. A plugin installed before workbench history exists has no earlier source snapshot; its current artifacts are captured before replacement or removal.
 
@@ -60,7 +60,7 @@ The command line runs the existing VFS shell and virtual `dsh`, without OS proce
 <a id="browser-persistence"></a>
 ## Browser persistence
 
-The preview establishes the shell boot barrier before loading the storage UI module; the shell waits for Worker injections before reading its module-loader facade. The Forge preview enables IndexedDB storage by default; `?storage=none` selects an ephemeral Worker without clearing saved data. The dsh-aiw page header reports pending, saved or failed filesystem writes and provides **Save now**. Startup and terminal storage failures also remain visible globally. The page transport exposes status subscriptions and explicit flush through `WorkerStorageControls`. The explicit flush action first drains buffered Session events through the mounted Session persistence service, then waits for browser storage; a Session flush failure stops confirmation. Automatic filesystem status alone does not acknowledge events still buffered by that service. Saved means the storage transaction completed; successful synchronous filesystem writes alone do not confirm persistence. Page unload is not used as a save guarantee. After writes are saved, a reload restores plugin installations, native enabled/disabled selections, configuration, Session files and workspace files before Cordis starts.
+The preview establishes the shell boot barrier before loading the storage UI module; the shell waits for Worker injections before reading its module-loader facade. The Forge preview enables IndexedDB storage by default; `?storage=none` selects an ephemeral Worker without clearing saved data. The dsh-aib page header reports pending, saved or failed filesystem writes and provides **Save now**. Startup and terminal storage failures also remain visible globally. The page transport exposes status subscriptions and explicit flush through `WorkerStorageControls`. The explicit flush action first drains buffered Session events through the mounted Session persistence service, then waits for browser storage; a Session flush failure stops confirmation. Automatic filesystem status alone does not acknowledge events still buffered by that service. Saved means the storage transaction completed; successful synchronous filesystem writes alone do not confirm persistence. Page unload is not used as a save guarantee. After writes are saved, a reload restores plugin installations, native enabled/disabled selections, configuration, Session files and workspace files before Cordis starts.
 
 `VfsPersistenceController` connects the VFS mutation sink to a replaceable `VfsPersistenceProvider`. Only runtime changes under `home/` and `workspace/` enter the store; base-image modules and untouched template files remain supplied by the static image. `IndexedDbVfsProvider` stores node metadata and 64 KiB file chunks separately. Subsequent appends write the changed tail and new chunks, while tombstones preserve deletions across reconstruction from the base image. Permissions and recorded modification times are restored; hard-link inode identity is not retained across Worker lifetimes. The Session log format is unchanged. Hydration still reconstructs these files in RAM; this provider does not make the VFS disk-backed. In-flight requests, plugin variables and transient DOM edits are not restored.
 
@@ -68,7 +68,7 @@ Storage namespaces include the storage schema, embedded Forge generation, deploy
 
 The Forge catalog records applied manifests and retained artifact ownership, independently of activation. Installation groups code, generated package metadata, profile registration and the catalog in one synchronous persistence batch before awaiting Cordis reconciliation. Removal first deselects and unloads the plugin, then groups file collection and catalog removal. A fresh Worker validates saved artifacts and restores importer mappings before profile composition; native Loader state determines activation afterward. Installed packages can therefore start without contacting Forge; loading the base image and page still requires their static resources. The catalog and controller implementations own these operations in [forge/catalog.ts](src/forge/catalog.ts) and [storage/persistence.ts](src/storage/persistence.ts).
 
-The current provider uses browser-local storage. It does not implement native RPC storage, cloud synchronization or cross-tab merging. File and plugin archive operations belong to the [AIW workbench](#aiw-workbench). Clearing site data removes it, and browser quota or storage eviction remains browser-owned. Callers of `createWorkerHost` opt in by passing a controller through `persistence`; without one the host remains ephemeral. The controller owns its provider until disposal, settles queued writes and closes the provider after host teardown.
+The current provider uses browser-local storage. It does not implement native RPC storage, cloud synchronization or cross-tab merging. File and plugin archive operations belong to the [AIB workbench](#aiw-workbench). Clearing site data removes it, and browser quota or storage eviction remains browser-owned. Callers of `createWorkerHost` opt in by passing a controller through `persistence`; without one the host remains ephemeral. The controller owns its provider until disposal, settles queued writes and closes the provider after host teardown.
 
 -----
 
@@ -111,7 +111,7 @@ Keep the plugin `id` and package `name` stable when updating. Edit the source an
 
 For a provider implemented on the page, pass it to `connectWorkerHost(worker, { httpTransport })`. A dedicated MessageChannel transfers request/response fields and ReadableStreams, and relays cancellation; functions stay on the page. Transfer failures and opaque responses fail explicitly rather than being buffered. The returned `disposeHttp()` aborts and detaches this provider; the caller retains Worker and tunnel ownership. Direct Worker embeddings own their provider's disposal and call `host.stop()` to abort active HTTP. Providers must honor `Request.signal`, including pending response bodies; host shutdown also cancels unread response streams.
 
-AIW build requests use the Worker's configured provider. The provider does not intercept source-chooser requests, static page assets, WebSockets, or code that creates another JavaScript realm. Same-origin plugin resources use the optional Service Worker bridge described above. The default provider remains subject to browser CORS; a native RPC provider can supply its own HTTP implementation without changing plugin request calls.
+AIB build requests use the Worker's configured provider. The provider does not intercept source-chooser requests, static page assets, WebSockets, or code that creates another JavaScript realm. Same-origin plugin resources use the optional Service Worker bridge described above. The default provider remains subject to browser CORS; a native RPC provider can supply its own HTTP implementation without changing plugin request calls.
 
 -----
 

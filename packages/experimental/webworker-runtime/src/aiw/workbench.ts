@@ -1,4 +1,4 @@
-/** Worker-local AIW operations over the guarded VFS and existing Forge command/installation paths. */
+/** Worker-local AIB operations over the guarded VFS and existing Forge command/installation paths. */
 import type { MemoryVfs } from '../storage/memory.ts'
 import type { ForgeInstaller } from '../forge/installer.ts'
 import type { ForgeCommands } from '../forge/commands.ts'
@@ -43,12 +43,12 @@ export class AiwWorkbench {
         lifetime.signal.throwIfAborted()
         const path = new URL(request.url).pathname
         if (path === '/__aiw/status' && request.method === 'GET') return Response.json(this.status())
-        if (path !== '/__aiw/action' || request.method !== 'POST') return Response.json({ error: { code: 'not-found', message: 'Unknown AIW operation' } }, { status: 404 })
+        if (path !== '/__aiw/action' || request.method !== 'POST') return Response.json({ error: { code: 'not-found', message: 'Unknown AIB operation' } }, { status: 404 })
         const text = await request.text()
-        if (new TextEncoder().encode(text).byteLength > 48 * 1024 * 1024) throw new ForgeError('request-limit', 'AIW request exceeds 48 MiB')
+        if (new TextEncoder().encode(text).byteLength > 48 * 1024 * 1024) throw new ForgeError('request-limit', 'AIB request exceeds 48 MiB')
         let parsed: unknown
         try { parsed = JSON.parse(text) }
-        catch (error) { throw new ForgeError('invalid-json', `AIW request must contain valid JSON: ${error instanceof Error ? error.message : String(error)}`) }
+        catch (error) { throw new ForgeError('invalid-json', `AIB request must contain valid JSON: ${error instanceof Error ? error.message : String(error)}`) }
         const body = object(parsed)
         lifetime.signal.throwIfAborted()
         return Response.json(await this.action(body, lifetime.signal))
@@ -234,7 +234,7 @@ export class AiwWorkbench {
         if (source !== undefined && (result.status === 'active' || result.status === 'disabled')) this.applySource(this.prepareSource(source))
         return { ...result, action: 'plugin-import' }
       }
-      default: throw new ForgeError('invalid-action', 'Unknown AIW action')
+      default: throw new ForgeError('invalid-action', 'Unknown AIB action')
     }
   }
 }

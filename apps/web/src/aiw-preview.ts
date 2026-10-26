@@ -1,4 +1,4 @@
-/** Worker request forwarding and initial Forge configuration for the dsh-aiw page. */
+/** Worker request forwarding and initial Forge configuration for the dsh-aib page. */
 import type { TunnelFetch } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
 import { forwardWorkerHostRequests } from './worker-host-fetch.ts'
 
@@ -27,7 +27,7 @@ export function mountAiwPreview(transport: Promise<TunnelFetch>, serverUrl?: str
         if (!response.ok) throw new Error(await response.text())
       } catch (error) {
         // The settings page remains available to correct an unavailable or invalid endpoint.
-        if (!lifetime.signal.aborted) console.error('dsh-aiw: could not apply the initial Forge address', error)
+        if (!lifetime.signal.aborted) console.error('dsh-aib: could not apply the initial Forge address', error)
       }
     }
     return hostFetch

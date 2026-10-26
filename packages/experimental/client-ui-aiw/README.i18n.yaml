@@ -3,23 +3,23 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/experimental/client-ui-aiw/README.md
 /:
-  en: ec61f8b8fbb30360
-  zh: 07c10f97ebdbf6ab
+  en: cd9eab6e7dddc4b0
+  zh: db8f1085497ca1e6
 /deepseek-ai-dsh-experimental-client-ui-aiw:
   en: 526beb037897f547
   zh: 706ab95855a9f4e9
 /deepseek-ai-dsh-experimental-client-ui-aiw/summary:
-  en: 1a59e6ad818b7182
-  zh: 2e4272ca30027924
+  en: 2313981640e99aa3
+  zh: 1d2d804c8e4fe27f
 /deepseek-ai-dsh-experimental-client-ui-aiw/table-of-contents:
   en: d152484eb41ac6b4
   zh: 70cecffc6351dc62
 /deepseek-ai-dsh-experimental-client-ui-aiw/use-this-package:
-  en: eba3b86e9f8afcd7
-  zh: 99d32b21c9c1635c
+  en: b0cab4445a39c004
+  zh: 06dee03247acc846
 /deepseek-ai-dsh-experimental-client-ui-aiw/understand-the-implementation:
-  en: 83521bb90d938c96
-  zh: 7e6f1bd949791635
+  en: c397f0a2b74e2e2a
+  zh: 3a76f283aabfb1ee
 /deepseek-ai-dsh-experimental-client-ui-aiw/further-exploration:
   en: 2251bcc9f435ac75
   zh: 7a395c3551a902f6

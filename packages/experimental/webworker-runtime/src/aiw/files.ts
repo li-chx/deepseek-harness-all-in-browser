@@ -1,4 +1,4 @@
-/** Guarded VFS access shared by the AIW file manager, backups and limited command line. */
+/** Guarded VFS access shared by the AIB file manager, backups and limited command line. */
 import { Buffer } from 'buffer'
 import type { MemoryVfs } from '../storage/memory.ts'
 import type { ShellFileSystem } from '../shell/types.ts'

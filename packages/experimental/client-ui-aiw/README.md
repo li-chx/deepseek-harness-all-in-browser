@@ -1,5 +1,5 @@
 ---
-description: "Manage Worker-local plugin projects, files, revision recovery and portable backups from the dsh-aiw page."
+description: "Manage Worker-local plugin projects, files, revision recovery and portable backups from the dsh-aib page."
 kind: "package-reference"
 ---
 
@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Open **dsh-aiw** below Plugins to edit virtual files, create and build local plugins, recover retained revisions, run limited commands and exchange workspace or plugin backups. Source drafts survive panel navigation. This page belongs to the browser Worker deployment and uses its existing transport, Forge installer and storage provider.
+Open **dsh-aib** below Plugins to edit virtual files, create and build local plugins, recover retained revisions, run limited commands and exchange workspace or plugin backups. Source drafts survive panel navigation. This page belongs to the browser Worker deployment and uses its existing transport, Forge installer and storage provider.
 
 ## Table of Contents
 
@@ -25,7 +25,9 @@ Open **dsh-aiw** below Plugins to edit virtual files, create and build local plu
 <a id="use-this-package"></a>
 ## Use this package
 
-The Worker image includes this marker plugin and discovers its Client entry through `dsh.client`. Open the left sidebar’s **dsh-aiw** page. No separate Node application or npm publication is needed for a local project.
+AIB means **All in Browser**. The package name, panel ID `dsh-aiw`, `/__aiw/` routes and `.aiw` data directory retain their existing identifiers; saved projects, revisions and settings use the same storage.
+
+The Worker image includes this marker plugin and discovers its Client entry through `dsh.client`. Open the left sidebar’s **dsh-aib** page. No separate Node application or npm publication is needed for a local project.
 
 | Section | Operations |
 |---|---|
@@ -49,7 +51,7 @@ Use **Save now** beside the page title before closing the browser. The workbench
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-The Client registers ordinary `sidebar.panellist`, `main` and `shell.overlay` contributions. A plugin-scoped controller owns cancellation, query snapshots, editor drafts and notices; components receive only renderer-bound snapshots and callbacks. Mutations use the Worker-local AIW endpoint, keeping build requests on the configured outbound HTTP provider. Closing a panel retains its draft, while unloading the plugin aborts outstanding requests and prevents late publication.
+The Client registers ordinary `sidebar.panellist`, `main` and `shell.overlay` contributions. A plugin-scoped controller owns cancellation, query snapshots, editor drafts and notices; components receive only renderer-bound snapshots and callbacks. Mutations use the Worker-local AIB endpoint, keeping build requests on the configured outbound HTTP provider. Closing a panel retains its draft, while unloading the plugin aborts outstanding requests and prevents late publication.
 
 </details>
 

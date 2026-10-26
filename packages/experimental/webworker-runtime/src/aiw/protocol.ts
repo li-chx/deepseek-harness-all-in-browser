@@ -1,4 +1,4 @@
-/** Worker-owned AIW file, source-project, history and portable-backup messages. */
+/** Worker-owned AIB file, source-project, history and portable-backup messages. */
 import type { ForgeInstalled, ForgeResult, ForgeManifest } from '../forge/protocol.ts'
 
 /** A managed source project discovered under the workspace. */

@@ -88,7 +88,7 @@ export function createForgeHost(vfs: MemoryVfs, modules: WorkerModuleLoader, pro
   const settingsPath = `${root}/home/.aiw/settings.json`
   if (vfs.existsSync(settingsPath)) {
     const settings = object(JSON.parse(vfs.readFileSync(settingsPath, 'utf8') as string))
-    if (settings.schema !== 1) throw new ForgeError('invalid-settings', 'Saved AIW settings schema is invalid')
+    if (settings.schema !== 1) throw new ForgeError('invalid-settings', 'Saved AIB settings schema is invalid')
     commands.configure(settings.baseUrl)
   }
   const aiw = new AiwWorkbench(vfs, root, profileDirectory, installer, commands, history)

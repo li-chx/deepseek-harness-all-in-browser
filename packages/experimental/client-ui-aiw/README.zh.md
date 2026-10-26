@@ -1,5 +1,5 @@
 ---
-description: "通过 dsh-aiw 页面管理 Worker 本地插件项目、文件、版本恢复与可导入的备份。"
+description: "通过 dsh-aib 页面管理 Worker 本地插件项目、文件、版本恢复与可导入的备份。"
 kind: "package-reference"
 ---
 
@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-打开“插件”下方的 **dsh-aiw**，即可编辑虚拟文件、创建并构建本地插件、恢复历史版本、运行精简命令，以及导入导出工作区或插件备份。源码草稿在页面切换后保留。本页面面向浏览器 Worker 部署，复用已有传输、Forge 安装器和存储提供者。
+打开“插件”下方的 **dsh-aib**，即可编辑虚拟文件、创建并构建本地插件、恢复历史版本、运行精简命令，以及导入导出工作区或插件备份。源码草稿在页面切换后保留。本页面面向浏览器 Worker 部署，复用已有传输、Forge 安装器和存储提供者。
 
 ## 目录
 
@@ -25,7 +25,9 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-Worker 镜像包含本包的标记插件，并通过 `dsh.client` 发现 Client 入口。打开左侧栏的 **dsh-aiw** 页面即可使用。本地项目不需要单独启动 Node 应用或发布到 npm。
+AIB 表示 **All in Browser**。包名、面板 ID `dsh-aiw`、`/__aiw/` 路由和 `.aiw` 数据目录保留原有标识；已保存的项目、历史版本和设置继续使用同一存储。
+
+Worker 镜像包含本包的标记插件，并通过 `dsh.client` 发现 Client 入口。打开左侧栏的 **dsh-aib** 页面即可使用。本地项目不需要单独启动 Node 应用或发布到 npm。
 
 | 页面 | 操作 |
 |---|---|
@@ -49,7 +51,7 @@ Worker 镜像包含本包的标记插件，并通过 `dsh.client` 发现 Client 
 <details>
 <summary>实现细节 — 点击展开</summary>
 
-Client 注册标准的 `sidebar.panellist`、`main` 与 `shell.overlay` 贡献。插件作用域内的控制器负责取消、查询快照、编辑草稿与通知；组件仅接收渲染器绑定的快照和回调。修改操作调用 Worker 本地 AIW 端点，使构建请求继续使用配置的出站 HTTP 提供者。关闭页面会保留草稿，卸载插件则中止未完成请求并阻止迟到的结果发布。
+Client 注册标准的 `sidebar.panellist`、`main` 与 `shell.overlay` 贡献。插件作用域内的控制器负责取消、查询快照、编辑草稿与通知；组件仅接收渲染器绑定的快照和回调。修改操作调用 Worker 本地 AIB 端点，使构建请求继续使用配置的出站 HTTP 提供者。关闭页面会保留草稿，卸载插件则中止未完成请求并阻止迟到的结果发布。
 
 </details>
 

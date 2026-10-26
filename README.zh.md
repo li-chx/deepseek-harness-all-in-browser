@@ -1,8 +1,8 @@
-# DeepSeek Harness
+# DeepSeek Harness AIB
 
 [English](README.md) | 中文
 
-DeepSeek Harness（`dsh`）是由 [DeepSeek AI](https://deepseek.com) 开发的开源 agent harness（智能体框架）。
+DeepSeek Harness AIB（**All in Browser**）是一个[面向浏览器的 fork](https://github.com/li-chx/deepseek-harness-all-in-browser)，基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)。原项目是由 [DeepSeek AI](https://deepseek.com) 开发的开源 agent harness（智能体框架）。[Worker 运行时](packages/experimental/webworker-runtime/README.zh.md)在浏览器中运行 Host；**dsh-aib** 工作台管理虚拟文件、插件项目与历史版本。浏览器部署方式见 [VFS 打包器](packages/experimental/webworker-packer/README.zh.md)。
 
 它构建于**一切皆插件**的架构之上，由 [Cordis](https://github.com/cordiverse/cordis) 驱动，其设计参见论文 [_A Programming Paradigm for Spatiotemporal Composability_](https://arxiv.org/abs/2608.25512)。
 
@@ -35,8 +35,8 @@ npx @deepseek-ai/dsh web
 如需从仓库源码运行：
 
 ```sh
-git clone https://github.com/deepseek-ai/deepseek-harness.git
-cd deepseek-harness
+git clone https://github.com/li-chx/deepseek-harness-all-in-browser.git
+cd deepseek-harness-all-in-browser
 pnpm install
 pnpm run build
 pnpm dsh web

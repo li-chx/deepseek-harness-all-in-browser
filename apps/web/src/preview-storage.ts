@@ -42,7 +42,7 @@ export interface PreviewStorageUi {
 }
 
 /**
- * Observe storage failures before boot; routine status and saving belong to dsh-aiw.
+ * Observe storage failures before boot; routine status and saving belong to dsh-aib.
  * @returns Controls to attach a connection or report failed boot.
  */
 export function mountPreviewStorage(): PreviewStorageUi {

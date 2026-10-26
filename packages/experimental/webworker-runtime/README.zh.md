@@ -14,7 +14,7 @@ kind: "package-library"
 ## 目录
 
 - [使用本包](#use-this-package)
-- [AIW 工作台](#aiw-workbench)
+- [AIB 工作台](#aiw-workbench)
 - [浏览器持久化](#browser-persistence)
 - [Forge 插件更新](#forge-plugin-updates)
 - [出站 HTTP 提供器](#outbound-http-providers)
@@ -47,9 +47,9 @@ kind: "package-library"
 -----
 
 <a id="aiw-workbench"></a>
-## AIW 工作台
+## AIB 工作台
 
-Worker 本地的 `/__aiw/status` 与 `/__aiw/action` 端点支持 AIW 管理页面。文件和源码项目保留在 VFS 中。覆盖已有文件前，文本编辑必须提供上次读取内容的摘要；新文件写入不会替换已有文件。编辑器支持最大 1 MiB 的 UTF-8 文件。应用 profile、Session 文件、凭据路径、不可变产物及内部历史库不能通过这些操作修改。基础包可只读浏览。文件操作与简易命令行共用这些访问规则；硬链接别名会被拒绝。
+Worker 本地的 `/__aiw/status` 与 `/__aiw/action` 端点支持 AIB 管理页面。文件和源码项目保留在 VFS 中。覆盖已有文件前，文本编辑必须提供上次读取内容的摘要；新文件写入不会替换已有文件。编辑器支持最大 1 MiB 的 UTF-8 文件。应用 profile、Session 文件、凭据路径、不可变产物及内部历史库不能通过这些操作修改。基础包可只读浏览。文件操作与简易命令行共用这些访问规则；硬链接别名会被拒绝。
 
 插件安装在替换或垃圾回收前保留已验证、按内容寻址的产物字节，包括经现有 CLI 发起的安装和卸载。源码构建还会保留准确的选定源码及规范化描述符。历史通过现有 home 目录持久化 provider 保存。修订单独记录实际的 Host 激活结果；保留代码不表示 Client 已激活。恢复经过普通完整性校验、安装器及 HMR 队列，可以在 Forge 离线时工作。工作台历史建立之前安装的插件没有更早的源码快照；替换或卸载前会捕获其当前产物。
 
@@ -60,7 +60,7 @@ Worker 本地的 `/__aiw/status` 与 `/__aiw/action` 端点支持 AIW 管理页�
 <a id="browser-persistence"></a>
 ## 浏览器持久化
 
-预览在加载存储 UI 模块前建立 shell 启动屏障；shell 等待 Worker 注入完成后才读取模块加载器入口。Forge 预览默认启用 IndexedDB 存储；`?storage=none` 选择临时 Worker，不清除已保存的数据。dsh-aiw 页面标题区报告文件系统的待保存、已保存或失败状态，并提供“立即保存”。启动失败及存储停止也会在全局保持可见。页面传输通过 `WorkerStorageControls` 提供状态订阅及显式刷新。显式保存操作先通过已挂载的 Session 持久化服务排空缓冲事件，再等待浏览器存储；Session 刷新失败会停止确认。自动文件系统状态本身不确认该服务仍在缓冲的事件。已保存表示存储事务已完成；同步文件系统写入成功本身不确认持久化。页面卸载不作为保存保证。写入保存后，刷新页面会在 Cordis 启动前恢复插件安装、原生启停选择、配置、Session 文件和工作区文件。
+预览在加载存储 UI 模块前建立 shell 启动屏障；shell 等待 Worker 注入完成后才读取模块加载器入口。Forge 预览默认启用 IndexedDB 存储；`?storage=none` 选择临时 Worker，不清除已保存的数据。dsh-aib 页面标题区报告文件系统的待保存、已保存或失败状态，并提供“立即保存”。启动失败及存储停止也会在全局保持可见。页面传输通过 `WorkerStorageControls` 提供状态订阅及显式刷新。显式保存操作先通过已挂载的 Session 持久化服务排空缓冲事件，再等待浏览器存储；Session 刷新失败会停止确认。自动文件系统状态本身不确认该服务仍在缓冲的事件。已保存表示存储事务已完成；同步文件系统写入成功本身不确认持久化。页面卸载不作为保存保证。写入保存后，刷新页面会在 Cordis 启动前恢复插件安装、原生启停选择、配置、Session 文件和工作区文件。
 
 `VfsPersistenceController` 将 VFS mutation sink 接入可替换的 `VfsPersistenceProvider`。仅 `home/` 和 `workspace/` 下的运行时变更进入存储；基础镜像模块与未修改的模板文件仍由静态镜像提供。`IndexedDbVfsProvider` 分开存储节点元数据和 64 KiB 文件块。后续追加只写变化的尾块及新增块，删除记录则确保从基础镜像重建时不会复活已删除文件。权限与已记录的修改时间会恢复；硬链接的 inode 身份不跨 Worker 生命周期保留。Session 日志格式不变。恢复仍会在 RAM 中重建这些文件；此提供者不会将 VFS 改为磁盘后端。正在执行的请求、插件变量和临时 DOM 修改不会恢复。
 
@@ -68,7 +68,7 @@ Worker 本地的 `/__aiw/status` 与 `/__aiw/action` 端点支持 AIW 管理页�
 
 Forge 清单记录已应用的 manifests 和保留产物的所有权，与激活结果独立。安装在等待 Cordis 协调前，将代码、生成的包元数据、Profile 注册及清单纳入一次同步持久化批次。删除先取消选择并卸载插件，再将文件回收与清单删除组合提交。新 Worker 在 Profile 合成前校验已保存产物并恢复按引用方解析的映射，随后由原生 Loader 状态决定激活结果。因此已安装包可在不联系 Forge 的情况下启动；基础镜像与页面仍需各自的静态资源。对应操作由 [forge/catalog.ts](src/forge/catalog.ts) 和 [storage/persistence.ts](src/storage/persistence.ts) 中的清单与控制器实现负责。
 
-当前提供者使用浏览器本地存储，不实现原生 RPC 存储、云端同步或跨标签页合并。文件及插件归档操作由 [AIW 工作台](#aiw-workbench)负责。清除站点数据会删除存储，配额和存储回收由浏览器管理。`createWorkerHost` 调用方通过 `persistence` 传入控制器来启用；未传入时，宿主保持临时模式。控制器拥有提供者直至释放，在宿主销毁后结算排队写入并关闭提供者。
+当前提供者使用浏览器本地存储，不实现原生 RPC 存储、云端同步或跨标签页合并。文件及插件归档操作由 [AIB 工作台](#aiw-workbench)负责。清除站点数据会删除存储，配额和存储回收由浏览器管理。`createWorkerHost` 调用方通过 `persistence` 传入控制器来启用；未传入时，宿主保持临时模式。控制器拥有提供者直至释放，在宿主销毁后结算排队写入并关闭提供者。
 
 -----
 
@@ -110,7 +110,7 @@ dsh plugin --profile web build ./greeting-source
 
 提供器在页面中实现时，将其传给 `connectWorkerHost(worker, { httpTransport })`。独立 MessageChannel 传输请求与响应字段及 ReadableStream，并转发取消；函数保留在页面中。传输失败和 opaque 响应明确报错，不退回整包缓冲。返回的 `disposeHttp()` 取消并解除此提供器，Worker 和隧道仍由调用者管理。直接嵌入 Worker 时，调用者负责销毁提供器，并通过 `host.stop()` 取消活动 HTTP。提供器必须遵守 `Request.signal`，包括尚未读完的响应体；宿主关闭也会取消未读响应流。
 
-AIW 构建请求使用 Worker 配置的提供者。该提供者不会拦截来源选择器请求、页面静态资源、WebSocket 或在其他 JavaScript realm 中创建的代码。同源插件资源使用上文说明的可选 Service Worker 桥接。默认提供者仍受浏览器 CORS 约束；原生 RPC 提供者可提供自己的 HTTP 实现，而无需修改插件请求调用。
+AIB 构建请求使用 Worker 配置的提供者。该提供者不会拦截来源选择器请求、页面静态资源、WebSocket 或在其他 JavaScript realm 中创建的代码。同源插件资源使用上文说明的可选 Service Worker 桥接。默认提供者仍受浏览器 CORS 约束；原生 RPC 提供者可提供自己的 HTTP 实现，而无需修改插件请求调用。
 
 -----
 

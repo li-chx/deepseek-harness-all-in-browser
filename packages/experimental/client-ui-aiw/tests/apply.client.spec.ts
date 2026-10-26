@@ -33,7 +33,7 @@ it('registers directly after Plugins and removes the panel, navigation and subsc
   await fiber.await()
   expect(slots.entries('sidebar.panellist')).toHaveLength(1)
   expect(slots.entries('sidebar.panellist')[0]?.options).toMatchObject({ id: 'dsh-aiw', order: 1 })
-  expect(resolveSlotLabel(slots.entries('sidebar.panellist')[0]?.options.label)).toBe('dsh-aiw')
+  expect(resolveSlotLabel(slots.entries('sidebar.panellist')[0]?.options.label)).toBe('dsh-aib')
   expect(slots.entries('main')).toHaveLength(1)
   expect(slots.entries('shell.overlay')).toHaveLength(1)
   await fiber.dispose()
