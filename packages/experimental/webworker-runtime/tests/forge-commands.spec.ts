@@ -5,6 +5,7 @@ import { ForgeCommands } from '../src/forge/commands.ts'
 import { ForgeInstaller } from '../src/forge/installer.ts'
 import { editForgeProfilePatch } from '../src/forge/profile-patch.ts'
 import { FORGE_GENERATION, type ForgeManifest } from '../src/forge/protocol.ts'
+import type { ForgeSourcePlugin } from '../src/forge/source.ts'
 import { createChildProcessFacade, type WorkerChildProcess } from '../src/node/builtin_modules/implemented/child_process.ts'
 import { VirtualExecutableRegistry } from '../src/shell/process/virtual-executables.ts'
 import { WorkerModuleLoader } from '../src/module-system/module-loader.ts'
@@ -39,6 +40,7 @@ function fixture() {
   const calls: string[] = []
   const requests: unknown[] = []
   let rejectBuild = false
+  let mutateSourceReply: ((manifest: ForgeManifest) => void) | undefined
   const entered = Promise.withResolvers<undefined>()
   let block = false
   const fetcher: typeof fetch = async (input, init) => {
@@ -50,21 +52,29 @@ function fixture() {
         void resolve
         init?.signal?.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
       })
-      const request = JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as { pluginId: string; plugin?: { id: string; name: string; version: string; entry: string; files: Record<string, string> } }
+      const request = JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as { pluginId: string; plugin?: ForgeSourcePlugin }
       requests.push(request)
       if (rejectBuild) return Response.json({ error: { code: 'COMPILE_FAILED', message: 'source compilation failed' } }, { status: 400 })
       if (request.plugin !== undefined) {
         const plugin = request.plugin
         const packageId = hash(JSON.stringify(plugin))
-        const artifactFiles = Object.entries(plugin.files).map(([path, value]) => {
+        const compiledFiles = { ...plugin.files, ...plugin.client === undefined ? {} : {
+          'forge-client.js': `window.__ModuleLoader__.load({id:${JSON.stringify(plugin.name)},factory(){return {apply(){}}}})`,
+        } }
+        const artifactFiles = Object.entries(compiledFiles).map(([path, value]) => {
           files.set(hash(value), value)
           return { path, size: Buffer.byteLength(value), sha256: hash(value), objectKey: `${FORGE_GENERATION}/objects/${hash(value)}` }
         })
-        return Response.json({ protocol: 1, generation: FORGE_GENERATION, revision: packageId, hostPackages: {},
+        const built: ForgeManifest = { protocol: 1, generation: FORGE_GENERATION, revision: packageId, hostPackages: {},
           plugin: { id: plugin.id, name: plugin.name, version: plugin.version, entry: plugin.entry, packageId },
           packages: [{ id: packageId, name: plugin.name, version: plugin.version, entry: plugin.entry,
-            dependencies: {}, hostDependencies: [], files: artifactFiles }],
-        })
+            dependencies: {}, hostDependencies: [], files: artifactFiles, ...plugin.client === undefined ? {} : {
+              metadata: { dsh: { client: { platform: 'web', inject: plugin.client.inject } },
+                exports: { '.': `./${plugin.entry}`, './client': './forge-client.js' } },
+            } }],
+        }
+        mutateSourceReply?.(built)
+        return Response.json(built)
       }
       return Response.json({ ...manifest, plugin: { ...manifest.plugin, id: request.pluginId } })
     }
@@ -87,6 +97,7 @@ function fixture() {
   cleanups.push(async () => { for (const stop of unregister) stop(); await commands.close(); await installer.close() })
   return { vfs, modules, installer, commands, facade, calls, requests, entered,
     rejectBuild: (): void => { rejectBuild = true },
+    changeSourceReply: (change: (manifest: ForgeManifest) => void): void => { mutateSourceReply = change },
     setActive: (value: boolean): void => { active = value },
     setDisabled: (value: boolean): void => { disabled = value }, block: (): void => { block = true } }
 }
@@ -202,6 +213,61 @@ it('builds explicit local files relative to cwd and updates the same source iden
   expect((await completion(f.facade.spawn('dsh', ['plugin', '--profile=web', 'build', '/dsh/workspace/plugin']))).stderr)
     .toContain('source compilation failed')
   expect(f.modules.requireFrom('/dsh/node_modules/loader')('source-example')).toMatchObject({ value: 2 })
+})
+
+function seedClientSource(vfs: MemoryVfs): void {
+  seedSource(vfs)
+  vfs.writeFileSync('/dsh/workspace/plugin/forge.json', JSON.stringify({ id: 'source-example', name: 'source-example',
+    version: '1.0.0', entry: 'src/main.ts', files: ['src/main.ts', 'ui.tsx'], client: { entry: 'ui.tsx' } }))
+  vfs.seed('/dsh/workspace/plugin/ui.tsx', 'export const apply = ctx => {};')
+}
+
+it('passes normalized Client source declarations to Forge and preserves the built Client export in the public package', async () => {
+  const f = fixture()
+  seedClientSource(f.vfs)
+  const built = await completion(f.facade.spawn('dsh', ['plugin', '--profile=web', 'build', '/dsh/workspace/plugin']))
+  expect(built).toMatchObject({ code: 0, stderr: '' })
+  expect(f.requests[0]).toMatchObject({ plugin: { client: { entry: 'ui.tsx', inject: [], files: ['ui.tsx'], dependencies: {}, peerDependencies: {} },
+    files: { 'ui.tsx': 'export const apply = ctx => {};' } } })
+  const directory = '/dsh/home/profiles/web/node_modules/source-example'
+  expect(JSON.parse(f.vfs.readFileSync(`${directory}/package.json`, 'utf8') as string)).toMatchObject({
+    dsh: { client: { platform: 'web', inject: [] } }, exports: { '.': './index.js', './client': './forge-client.js' },
+  })
+  expect(f.vfs.readFileSync(`${directory}/forge-client.js`, 'utf8')).toContain('id:"source-example"')
+  expect(built.stdout).toContain('Installed source-example')
+  expect(built.stdout).not.toContain('Client activated')
+})
+
+it.each(['omitted', 'inject', 'export'] as const)('rejects a source response that changes the requested Client half: %s', async (kind) => {
+  const f = fixture()
+  seedClientSource(f.vfs)
+  expect((await completion(f.facade.spawn('dsh', ['plugin', '--profile=web', 'build', '/dsh/workspace/plugin']))).code).toBe(0)
+  const before = f.vfs.readFileSync('/dsh/home/profiles/web/node_modules/source-example/package.json', 'utf8')
+  f.changeSourceReply((manifest) => {
+    const root = manifest.packages[0]
+    if (root?.metadata?.dsh?.client === undefined) throw Error('Fixture has no Client metadata')
+    if (kind === 'omitted') delete root.metadata.dsh.client
+    else if (kind === 'inject') root.metadata.dsh.client.inject.push('other-client')
+    else root.metadata.exports = { '.': './src/main.ts', './client': './missing-client.js' }
+  })
+  const failed = await completion(f.facade.spawn('dsh', ['plugin', '--profile=web', 'build', '/dsh/workspace/plugin']))
+  expect(failed).toMatchObject({ code: 1 })
+  expect(failed.stderr).toContain('Forge returned')
+  expect(f.vfs.readFileSync('/dsh/home/profiles/web/node_modules/source-example/package.json', 'utf8')).toBe(before)
+})
+
+it('rejects an unexpected Client half for a Host-only source request before installing', async () => {
+  const f = fixture()
+  seedSource(f.vfs)
+  f.changeSourceReply((manifest) => {
+    const root = manifest.packages[0]
+    if (root === undefined) throw Error('Fixture has no root package')
+    root.metadata = { dsh: { client: { platform: 'web', inject: [] } } }
+  })
+  const failed = await completion(f.facade.spawn('dsh', ['plugin', '--profile=web', 'build', '/dsh/workspace/plugin']))
+  expect(failed).toMatchObject({ code: 1 })
+  expect(failed.stderr).toContain('Forge returned')
+  expect(f.installer.installed().plugins).toEqual([])
 })
 
 it('source identity collisions and invalid file selection never request a build', async () => {

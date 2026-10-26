@@ -13,6 +13,14 @@ export interface ForgeSourcePlugin {
   dependencies: Record<string, string>
   peerDependencies: Record<string, string>
   peerDependenciesMeta?: Record<string, { optional?: boolean }>
+  /** Browser entry, Client-only files, package graph edges and separate browser dependency declarations. */
+  client?: {
+    entry: string
+    inject: string[]
+    files: string[]
+    dependencies: Record<string, string>
+    peerDependencies: Record<string, string>
+  }
 }
 
 const packageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/
@@ -45,6 +53,29 @@ function peerMetadata(value: unknown): Record<string, { optional?: boolean }> | 
     return [name, fields.optional === undefined ? {} : { optional: fields.optional }]
   }))
 }
+function clientSource(value: unknown, paths: readonly string[], hostEntry: string): ForgeSourcePlugin['client'] {
+  if (value === undefined) return undefined
+  const client = object(value)
+  const allowed = new Set(['entry', 'inject', 'files', 'dependencies', 'peerDependencies'])
+  if (Object.keys(client).some(field => !allowed.has(field))) fail('client supports only entry, inject, files, dependencies and peerDependencies')
+  const entry = sourcePath(client.entry)
+  if (entry.endsWith('.json')) fail('client.entry must be a JavaScript or TypeScript module')
+  if (!paths.includes(entry)) fail('client.entry must appear in files')
+  const selected = client.files === undefined ? [entry] : client.files
+  if (!Array.isArray(selected) || selected.length === 0 || selected.length > 1000) fail('client.files must list 1–1000 source paths')
+  const files = selected.map(sourcePath)
+  if (new Set(files).size !== files.length) fail('client.files must not contain duplicate paths')
+  if (!files.includes(entry)) fail('client.entry must appear in client.files')
+  if (files.includes(hostEntry)) fail('client.files cannot include the Host entry')
+  if (files.some(path => !paths.includes(path))) fail('client.files must be a subset of files')
+  const inject = client.inject === undefined ? [] : client.inject
+  if (!Array.isArray(inject) || !inject.every((name: unknown): name is string => typeof name === 'string' && packageName.test(name))) {
+    fail('client.inject must list npm package names')
+  }
+  if (new Set(inject).size !== inject.length) fail('client.inject must not contain duplicate package names')
+  return { entry, inject, files, dependencies: dependencies(client.dependencies, 'client.dependencies'),
+    peerDependencies: dependencies(client.peerDependencies, 'client.peerDependencies') }
+}
 
 /**
  * Read only explicitly listed sources, after validating every descriptor field.
@@ -73,7 +104,7 @@ export async function readForgeSource(
   try { parsed = JSON.parse(descriptorText) }
   catch (error) { throw new ForgeError('invalid-source', `forge.json: invalid JSON (${error instanceof Error ? error.message : 'parse failed'})`) }
   const descriptor = object(parsed)
-  const allowed = new Set(['id', 'name', 'version', 'entry', 'files', 'dependencies', 'peerDependencies', 'peerDependenciesMeta'])
+  const allowed = new Set(['id', 'name', 'version', 'entry', 'files', 'dependencies', 'peerDependencies', 'peerDependenciesMeta', 'client'])
   if (Object.keys(descriptor).some(field => !allowed.has(field))) fail('unexpected descriptor field; protocol and generation are supplied by the host')
   const id = pluginId(descriptor.id)
   const name = text(descriptor.name, 'name')
@@ -87,6 +118,7 @@ export async function readForgeSource(
   const dependencyMap = dependencies(descriptor.dependencies, 'dependencies')
   const peers = dependencies(descriptor.peerDependencies, 'peerDependencies')
   const metadata = peerMetadata(descriptor.peerDependenciesMeta)
+  const client = clientSource(descriptor.client, paths, entry)
   const selected: Array<[string, string]> = []
   for (const path of paths) {
     const absolute = resolve(root, path)
@@ -98,5 +130,5 @@ export async function readForgeSource(
     selected.push([path, contents])
   }
   return { id, name, version, entry, files: Object.fromEntries(selected), dependencies: dependencyMap, peerDependencies: peers,
-    ...(metadata === undefined ? {} : { peerDependenciesMeta: metadata }) }
+    ...(metadata === undefined ? {} : { peerDependenciesMeta: metadata }), ...client === undefined ? {} : { client } }
 }

@@ -36,6 +36,28 @@ it('reads explicit TS and JSON sources with separate dependencies and optional p
   expect(f.reads).toEqual(['/workspace/plugin/forge.json', '/workspace/plugin/main.ts', '/workspace/plugin/data.json'])
 })
 
+it.each([undefined, ['@deepseek-ai/dsh-client-ui-conversation']])
+('reads a listed TSX Client entry and normalizes its package dependencies: %j', async (inject) => {
+  const f = fixture({ files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', ...inject === undefined ? {} : { inject } } })
+  f.files.set('/workspace/plugin/ui.tsx', 'export const Counter = () => <span>1</span>')
+  const result = await readForgeSource('plugin', '/workspace', f.filesystem, new AbortController().signal)
+  expect(result.client).toEqual({ entry: 'ui.tsx', inject: inject ?? [], files: ['ui.tsx'], dependencies: {}, peerDependencies: {} })
+  expect(result.files['ui.tsx']).toBe('export const Counter = () => <span>1</span>')
+  expect(f.reads).toEqual(['/workspace/plugin/forge.json', '/workspace/plugin/main.ts', '/workspace/plugin/ui.tsx'])
+})
+
+it('keeps explicit Client-only files and browser dependencies separate from shared Host inputs', async () => {
+  const f = fixture({ files: ['main.ts', 'ui.tsx', 'view.tsx', 'data.json'], dependencies: { shared: '^1.0.0' },
+    client: { entry: 'ui.tsx', files: ['ui.tsx', 'view.tsx', 'data.json'], dependencies: { browser: '^2.0.0' }, peerDependencies: { react: '^19.0.0' } } })
+  f.files.set('/workspace/plugin/ui.tsx', 'export { View } from "./view.tsx"')
+  f.files.set('/workspace/plugin/view.tsx', 'export const View = () => <span>1</span>')
+  const result = await readForgeSource('plugin', '/workspace', f.filesystem, new AbortController().signal)
+  expect(result.client).toEqual({ entry: 'ui.tsx', inject: [], files: ['ui.tsx', 'view.tsx', 'data.json'],
+    dependencies: { browser: '^2.0.0' }, peerDependencies: { react: '^19.0.0' } })
+  expect(result.dependencies).toEqual({ shared: '^1.0.0' })
+  expect(Object.keys(result.files)).toEqual(['main.ts', 'ui.tsx', 'view.tsx', 'data.json'])
+})
+
 it.each([
   { files: ['main.ts', 'main.ts'] },
   { files: ['data.json'] },
@@ -52,6 +74,29 @@ it.each([
   { generation: 'override' },
   { protocol: 1 },
   { hostPackages: {} },
+  { client: null },
+  { client: [] },
+  { client: {} },
+  { client: { entry: 'ui.tsx' } },
+  { client: { entry: '../main.ts' } },
+  { client: { entry: 'data.json' } },
+  { client: { entry: 'main.ts', platform: 'web' } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', inject: null } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', inject: 'slots' } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', inject: [1] } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', inject: [''] } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', inject: ['file:///somewhere'] } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', inject: ['react', 'react'] } },
+  { client: { entry: 'main.ts' } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', files: null } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', files: [] } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', files: ['ui.tsx', 'ui.tsx'] } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', files: ['data.json'] } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', files: ['ui.tsx', 'main.ts'] } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', files: ['ui.tsx', '../secret.ts'] } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', files: ['ui.tsx', 'missing.ts'] } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', dependencies: { browser: 1 } } },
+  { files: ['main.ts', 'ui.tsx'], client: { entry: 'ui.tsx', peerDependencies: [] } },
 ])('rejects malformed descriptor fields before reading selected sources: %j', async (descriptor) => {
   const f = fixture(descriptor)
   await expect(readForgeSource('/workspace/plugin', '/ignored', f.filesystem, new AbortController().signal)).rejects.toThrow()

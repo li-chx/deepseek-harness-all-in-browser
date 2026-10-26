@@ -5,7 +5,7 @@ description: Use when designing, reviewing, adding, enabling, disabling, install
 
 # Persistent Harness plugins
 
-In the browser Worker, follow the system prompt's Host-only Forge workflow, not the Node workflow below. Do not try `install_bundle` or Client/display-resource templates. Published npm Client support does not enable local Client authoring. Report UI limitations before partial Host work; use the inline Host example because JavaScript template files may be absent.
+In the browser Worker, follow the system prompt's Forge workflow instead of the Node installation below. Its optional `client` descriptor accepts ordinary Client source; Forge supplies the wrapper and manifest. Do not try `install_bundle` or submit Node package/display templates. Some JavaScript templates are absent from that image; use the inline guidance. Inventory icon/locale exports remain unsupported.
 
 The following installation workflow applies to Node deployments. Use ordinary workspace files to author a bundle, then `plugin_manager` with `action: install_bundle` and the absolute package directory as `target` to install it in the current profile. Changes affect every session in that profile and survive restart. Load `editing-cordis-compositions` for agent preset changes.
 

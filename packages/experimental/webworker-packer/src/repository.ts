@@ -228,7 +228,7 @@ export function clientPlatformPackages(repoRoot: string): Readonly<Record<string
  * @returns The packed image and its lazy archives.
  */
 export function packRepositoryImage(repoRoot: string, profile: string, root?: string): PackResult {
-  return packVfsImage({
+  const packed = packVfsImage({
     profile,
     clientPackages: clientPlatformPackages(repoRoot),
     roster: profileRoster(repoRoot, profile).roster,
@@ -239,6 +239,7 @@ export function packRepositoryImage(repoRoot: string, profile: string, root?: st
     configTrees: configTrees(repoRoot),
     homePatch: platformHomePatch(repoRoot, profile, root),
   })
+  return { ...packed, clientModules: [...PLATFORM_MODULES] }
 }
 
 /**

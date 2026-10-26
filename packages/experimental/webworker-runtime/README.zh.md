@@ -62,7 +62,7 @@ Forge 清单记录已应用的 manifests 和保留产物的所有权，与激活
 <a id="forge-plugin-updates"></a>
 ## Forge 插件更新
 
-预览页面通过 `?forge=<HTTP 服务地址>` 打开可选控制面板。**DSH Forge** 将 TypeScript Host 插件源码或 npm 包规格提交给该服务，并通过运行中的 Worker 应用编译清单。rc.2 前端内嵌 `FORGE_GENERATION = 'dsh-worker-rc2-8'`，在下载或写入前拒绝其他代际的产物。服务必须面向同一代际以及基础镜像提供的准确宿主包版本。核心包和共享宿主模块由前端构建提供。目标单独声明 `clientPackages`，在应用 overlay 前从可信基础镜像捕获；页面共享包的准确版本用于满足 Client 依赖，不授予 Host 导入能力。缺失或不匹配的 Client 依赖，以及替换共享 Client 包的尝试，均在文件写入前拒绝。带有受支持的单入口 `dsh.bundle` patch 的发布包可以携带现成的 Client bundle；包元数据和资源进入普通 Client 图及 HMR 路径。
+预览页面通过 `?forge=<HTTP 服务地址>` 打开可选控制面板。**DSH Forge** 将本地 Host/Client 插件源码或 npm 包规格提交给该服务，并通过运行中的 Worker 应用编译清单。rc.2 前端内嵌 `FORGE_GENERATION = 'dsh-worker-rc2-8'`，在下载或写入前拒绝其他代际的产物。服务必须面向同一代际以及基础镜像提供的准确宿主包版本。核心包和共享宿主模块由前端构建提供。目标单独声明 `clientPackages`，在应用 overlay 前从可信基础镜像捕获；页面共享包的准确版本用于满足 Client 依赖，不授予 Host 导入能力。缺失或不匹配的 Client 依赖，以及替换共享 Client 包的尝试，均在文件写入前拒绝。带有受支持的单入口 `dsh.bundle` patch 的发布包可以携带现成的 Client bundle；包元数据和资源进入普通 Client 图及 HMR 路径。
 
 安装器在修改文件前校验完整清单、受支持的 bundle patch 和缺失产物的字节。支持的 bundle patch 必须只包含一次自包 `insert`，条目仅含 `id`、`name` 及可选的 JSON 兼容字面量 `config`（对象、数组、标量或 null），配置结构由插件自行校验。同一 patch 还可用唯一 `id` 覆盖已有根条目的字面量 `config`、`disabled`（布尔值或 null）或两者。覆盖不能指向自身插入条目，也不能改变拓扑；原生 Cordis 合成应用这些覆盖，不改变核心包版本。安装器保留原始 patch 字节及顺序；插入条目的额外字段（包括 `disabled`）、覆盖条目的额外字段、非有限数字、YAML 别名和非 JSON 标签均在写入前拒绝。发布的 bundle 使用 profile 原生的 `dsh.profile.bundles` 选择及其原始 patch id；更新会删除旧的 Forge 注册行，使原生控制和 Forge 共用一个实例。更新保留原生禁用选择并报告 `disabled`；已安装状态查询读取当前选择和实时 Loader 条目。原生禁用条目仅在 fiber 不活跃后报告 `disabled`；启用但导入失败的条目仍报告激活失败。不含 bundle 元数据的插件使用 Forge 管理的 profile patch 行。无关的 profile 字段和 patch 行保持不变。
 
@@ -74,7 +74,7 @@ Forge 准备声明的依赖包，并交付逐文件转换的模块，保留包�
 
 所有文件变更均使用普通 VFS mutation。`ForgeInstaller.subscribe()` 提供文件应用和激活的批次通知，VFS 订阅者则观察单个写入和删除。两种通知都不确认持久化完成。Forge 将已安装根包映射到 profile 的 `node_modules`；`createRequire(anchor).resolve.paths()` 提供锚点的各级父目录包搜索路径，使标准 bundle 清单无需 `./package.json` 导出即可发现这些包。未接入持久化提供者时，安装状态仅在当前 Worker 生命周期内有效；使用[浏览器持久化](#browser-persistence)时，已应用产物和所有权会在启动前恢复。[安装器](src/forge/installer.ts) 负责这些操作，[协议校验器](src/forge/protocol.ts) 负责清单准入。
 
-### 构建本地 Host 插件
+### 构建本地插件
 
 在已配置的 Worker 预览中，将源码文件与 `forge.json` 写入会话工作区，然后运行：
 
@@ -82,7 +82,9 @@ Forge 准备声明的依赖包，并交付逐文件转换的模块，保留包�
 dsh plugin --profile web build ./greeting-source
 ```
 
-目录相对于 shell 当前工作目录解析。其 `forge.json` 声明 `id`、npm 包 `name`、准确 `version`、相对 `entry` 及包含入口的相对源码路径数组 `files`。可选的 `dependencies` 与 `peerDependencies` 映射缺省为空对象；`peerDependenciesMeta` 可声明可选 peer。命令通过调用方 shell 的文件系统读取选定的 JS、TS 和 JSON 文件，将内容提交给 Forge 的 `/v1/builds`，校验产物并通过既有安装器应用。HTTP 请求沿用 npm 安装的同一可替换提供者。此 Worker 兼容命令不调用本地 Node 编译器，也不发布 npm 包。Host 源码编译不会生成 Client 束，也不提供浏览器 DOM API。
+目录相对于 shell 当前工作目录解析。其 `forge.json` 声明 `id`、npm 包 `name`、准确 `version`、相对 Host `entry` 及包含入口的相对源码路径数组 `files`。可选的 `dependencies` 与 `peerDependencies` 映射缺省为空对象；`peerDependenciesMeta` 可声明可选 peer。命令通过调用方 shell 的文件系统读取选定的 JS、JSX、TS、TSX 和 JSON 文件，将内容提交给 Forge 的 `/v1/builds`，校验产物并通过既有安装器应用。HTTP 请求沿用 npm 安装的同一可替换提供者。此 Worker 兼容命令不调用本地 Node 编译器，也不发布 npm 包。Host 代码在 Worker 中运行，没有浏览器 DOM API。
+
+要构建 Client 半，添加 `"client": { "entry": "client.tsx", "inject": ["@deepseek-ai/dsh-client-ui-conversation"] }`，并将该入口及其本地导入文件加入根 `files`。`client.files` 列出仅供浏览器使用的文件，缺省为 `[client.entry]`，必须包含该入口，且必须是根 `files` 的子集，不能包含 Host 入口。其余提交文件仍作为 Host 编译输入，包括通过计算得到的 require 路径加载的模块；浏览器代码也可导入共享输入。`client.inject` 列出 Client 包依赖图中的依赖，缺省为 `[]`；Client 源码导出的 `inject` 则另行声明 `slots` 等 Cordis 服务。可选的 `client.dependencies` 与 `client.peerDependencies` 缺省为 `{}`，用于声明额外浏览器依赖，不会让 Host 代码获得这些包；根依赖声明仍用于 Host 编译。同一包在根和 Client 中的声明必须使用相同的版本范围文本。源码按常规导出 Client 的 `apply`/`inject`；Forge 生成浏览器工厂以及 `dsh.client`、`./client` 元数据。安装器将该产物镜像到普通 Client 依赖图中，以完成加载和热替换。根 `package.json` 仍由服务生成，不能作为源码提交。构建命令成功只报告 Host 激活，不确认 Client 组件已挂载；须另行检查 Client 注册并实际验证其可见行为。 在 preview 中，同源 `/api/` Fetch 请求经由 Worker carrier。其 direct 通道增量传输 `text/event-stream`，其他响应类型则缓冲到结束；实时 Host 更新使用 SSE，有限快照使用 JSON。
 
 更新时保持插件 `id` 与包 `name` 不变。修改源码后重新运行构建命令；仅修改源文件不会重建已安装产物。安装器负责 Loader 登记与热替换。源码校验、下载或编译失败会保留已安装版本；激活失败返回非零退出码，不承诺恢复旧实例。禁用的插件保持禁用，命令成功不确认持久化完成。验证行为后，刷新前使用页面的显式保存操作；工作区源码与安装产物保存在不同的 VFS 路径中。[forge/commands.ts](src/forge/commands.ts) 和 [forge/source.ts](src/forge/source.ts) 负责命令解析与源码收集。
 

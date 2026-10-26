@@ -1,7 +1,7 @@
 /** Profile-scoped plugin CLI operations backed by Forge, without a Node subprocess. */
 import { sha256 } from '@noble/hashes/sha2.js'
 import type { ForgeInstaller } from './installer.ts'
-import { ForgeError, object } from './protocol.ts'
+import { ForgeError, object, parseForgeManifest } from './protocol.ts'
 import { readForgeSource } from './source.ts'
 import type { VirtualExecutable, VirtualExecutableExit } from '../shell/process/virtual-executables.ts'
 
@@ -114,10 +114,26 @@ export class ForgeCommands {
     }
     signal.throwIfAborted()
     if (source !== undefined) {
-      const returned = object(object(payload).plugin)
+      const target = this.installer.target()
+      const manifest = parseForgeManifest(payload, target.hostPackages, target.clientPackages, target.sharedPackages)
+      const returned = manifest.plugin
       if (returned.id !== source.id || returned.name !== source.name || returned.version !== source.version
         || returned.entry !== source.entry) {
         throw new ForgeError('build-identity-mismatch', 'Forge returned a different source plugin identity or entry')
+      }
+      const root = manifest.packages.find(pkg => pkg.id === returned.packageId)
+      const client = root?.metadata?.dsh?.client
+      const expectedClient = source.client
+      if (expectedClient === undefined ? client !== undefined : client === undefined
+        || client.inject.length !== expectedClient.inject.length || client.inject.some(name => !expectedClient.inject.includes(name))) {
+        throw new ForgeError('build-client-mismatch', 'Forge returned different Client package dependencies or omitted the requested Client module')
+      }
+      if (source.client !== undefined) {
+        const exports = root?.metadata?.exports
+        const entry = exports !== null && typeof exports === 'object' && !Array.isArray(exports) ? exports['./client'] : undefined
+        if (typeof entry !== 'string' || !root?.files.some(file => `./${file.path}` === entry)) {
+          throw new ForgeError('build-client-mismatch', 'Forge returned no included ./client export for the requested Client module')
+        }
       }
     }
     const result = await this.installer.install(payload, base, signal)

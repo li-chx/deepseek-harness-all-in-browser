@@ -121,6 +121,8 @@ export interface PackedLazyArchive {
 
 /** What one pack produced, for the caller to report or assert on. */
 export interface PackResult {
+  /** Exact module specifiers seeded by the associated static page; repository packs supply this build-time inventory. */
+  readonly clientModules?: readonly string[]
   /** The gzip-compressed tar archive to write; the runtime inflates it at mount. */
   readonly image: Uint8Array
   /** Every base-image entry, before zipping; the manifest is already among them. */

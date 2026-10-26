@@ -1,6 +1,6 @@
 # UI plugins in the Web page
 
-These instructions require a deployment that accepts a package with Client metadata. The browser Worker's local Forge source build accepts neither `dsh.client` nor custom exports, so it cannot install this UI template; even a precompiled `client.js` in its source list is insufficient. Follow the Worker system prompt and report that limitation without trying Node installation workarounds. Published npm Client packages follow a separate supported loading path.
+In the browser Worker, declare `client: {entry: 'client.tsx', inject: ['@deepseek-ai/dsh-client-ui-conversation']}` in `forge.json`, list every local source file, and use the system prompt's Forge build command. Write ordinary JS/JSX/TS/TSX named exports for `inject` and `apply`; do not copy the prewrapped `client.js` below. Forge emits the lazy factory and `dsh.client` / `./client` metadata. Descriptor `client.inject` names plugin packages; the source export `inject` names services. Declare shared React as a peer, use existing slots, and verify Client mounting separately from Host activation. The manifest/template instructions below apply to Node bundles and published artifacts.
 
 Read `templates/decoration/` with the file-read tool and write its files into your bundle directory: its `package.json` adds a `dsh.client` section (`platform`, `immediately`, `inject`) and a `./client` export beside the bundle patch.
 
