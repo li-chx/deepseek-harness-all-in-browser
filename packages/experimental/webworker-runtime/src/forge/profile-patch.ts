@@ -32,12 +32,12 @@ export function editForgeProfilePatch(text: string, id: string, entry: string | 
   return String(document)
 }
 
-/** Read a published self-loading entry and validate literal overrides of other root entries.
+/** Read a published bundle's package entries and validate literal overrides of other root entries.
  * @param text Verified bundle patch artifact; its bytes are retained unchanged during installation.
- * @param name Published package name the entry must load.
- * @returns Native entry id required during profile reconciliation.
+ * @param name Published package name whose root or subpaths each entry must load.
+ * @returns Ordered native entry ids and module names required during profile reconciliation.
  */
-export function forgeBundleEntry(text: string, name: string): string {
+export function forgeBundleEntries(text: string, name: string): { id: string; name: string }[] {
   const document = parseDocument(text)
   if (document.errors.length || document.warnings.length) {
     throw new ForgeError('unsupported-bundle', 'Bundle patch must be valid literal YAML without unsupported tags')
@@ -54,17 +54,22 @@ export function forgeBundleEntry(text: string, name: string): string {
     }
   })
   const rows: unknown = document.toJSON()
-  if (!Array.isArray(rows)) throw new ForgeError('unsupported-bundle', 'Bundle patch must be a sequence with one insert')
-  let insertedId: string | undefined
+  if (!Array.isArray(rows)) throw new ForgeError('unsupported-bundle', 'Bundle patch must be a sequence with package inserts')
+  const entries: { id: string; name: string }[] = []
+  const insertedIds = new Set<string>()
   const overrides = new Set<string>()
   for (const value of rows) {
     const row = bundleObject(value, 'Bundle patch row')
     if ('insert' in row) {
-      if (insertedId !== undefined) throw new ForgeError('unsupported-bundle', 'Bundle patch must contain exactly one insert')
-      if (Object.keys(row).some(key => key !== 'insert') || !Array.isArray(row.insert) || row.insert.length !== 1) {
-        throw new ForgeError('unsupported-bundle', 'Bundle insert must contain one entry and no other patch operations')
+      if (Object.keys(row).some(key => key !== 'insert') || !Array.isArray(row.insert) || row.insert.length === 0) {
+        throw new ForgeError('unsupported-bundle', 'Bundle insert must contain package entries and no other patch operations')
       }
-      insertedId = selfEntry(row.insert[0], name)
+      for (const value of row.insert) {
+        const entry = packageEntry(value, name)
+        if (insertedIds.has(entry.id)) throw new ForgeError('unsupported-bundle', `Bundle inserted id ${entry.id} is duplicated`)
+        insertedIds.add(entry.id)
+        entries.push(entry)
+      }
       continue
     }
     for (const key of Object.keys(row)) {
@@ -83,21 +88,26 @@ export function forgeBundleEntry(text: string, name: string): string {
       throw new ForgeError('unsupported-bundle', `Bundle override ${id} disabled must be a literal boolean or null`)
     }
   }
-  if (insertedId === undefined) throw new ForgeError('unsupported-bundle', 'Bundle patch must contain exactly one insert')
-  if (overrides.has(insertedId)) throw new ForgeError('unsupported-bundle', `Bundle cannot override its own inserted entry ${insertedId}`)
-  return insertedId
+  if (entries.length === 0) throw new ForgeError('unsupported-bundle', 'Bundle patch must contain at least one package insert entry')
+  for (const id of insertedIds) {
+    if (overrides.has(id)) throw new ForgeError('unsupported-bundle', `Bundle cannot override its own inserted entry ${id}`)
+  }
+  return entries
 }
 
-function selfEntry(value: unknown, name: string): string {
+function packageEntry(value: unknown, name: string): { id: string; name: string } {
   const entry = bundleObject(value, 'Bundle entry')
   for (const key of Object.keys(entry)) {
     if (!['id', 'name', 'config'].includes(key)) {
       throw new ForgeError('unsupported-bundle', `Bundle entry field ${key} is not supported`)
     }
   }
-  if (entry.name !== name) throw new ForgeError('unsupported-bundle', 'Bundle entry must load its published package')
+  if (typeof entry.name !== 'string' || !(entry.name === name || entry.name.startsWith(name + '/')
+    && entry.name.slice(name.length + 1).split('/').every(part => /^[a-zA-Z0-9_@.+-]+$/.test(part) && !['.', '..', 'node_modules'].includes(part)))) {
+    throw new ForgeError('unsupported-bundle', 'Bundle entry must load its published package or a safe subpath')
+  }
   if ('config' in entry) validateLiteral(entry.config, 'Bundle entry config')
-  return pluginId(entry.id)
+  return { id: pluginId(entry.id), name: entry.name }
 }
 
 function bundleObject(value: unknown, subject: string): Record<string, unknown> {

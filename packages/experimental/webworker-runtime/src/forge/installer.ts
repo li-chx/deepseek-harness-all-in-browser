@@ -1,12 +1,12 @@
 /** Applies complete plugin plans through VFS mutations and Cordis reconciliation. */
 import { applyForgeMappings, forgeCatalog, forgePublicExports, type ForgeCatalog } from './catalog.ts'
 import { forgeSharedPackages } from './package-policy.ts'
-import { forgeBundleEntry, hasForgeProfileEntry } from './profile-patch.ts'
+import { forgeBundleEntries, hasForgeProfileEntry } from './profile-patch.ts'
 import { sha256 } from '@noble/hashes/sha2.js'
 import type Hmr from '@deepseek-ai/dsh-hmr'
 import type { MemoryVfs } from '../storage/memory.ts'
 import type { WorkerModuleLoader } from '../module-system/module-loader.ts'
-import { dirname, join, pathToFileUrl } from '../module-system/posix-path.ts'
+import { dirname, fileUrlToPath, join, pathToFileUrl } from '../module-system/posix-path.ts'
 import { ForgeError, FORGE_GENERATION, parseForgeManifest, pluginId, object, type ForgeManifest, type ForgePackage } from './protocol.ts'
 
 export type { ForgeInstalled, ForgeResult } from './protocol.ts'
@@ -222,31 +222,48 @@ export class ForgeInstaller {
     return profile.bundles
   }
 
-  private bundleEntry(manifest: ForgeManifest, prepared: ReadonlyMap<string, Uint8Array> = new Map()): string | undefined {
+  private bundleEntries(
+    manifest: ForgeManifest, prepared: ReadonlyMap<string, Uint8Array> = new Map(),
+  ): ReturnType<typeof forgeBundleEntries> | undefined {
     const root = manifest.packages.find(pkg => pkg.id === manifest.plugin.packageId)
     const patch = root?.metadata?.dsh?.bundle?.patch
     if (root === undefined || patch === undefined) return undefined
     const file = root.files.find(file => file.path === patch.replace(/^\.\//, ''))
     if (file === undefined) throw new ForgeError('invalid-manifest', 'Bundle patch artifact is missing')
     const bytes = prepared.get(file.sha256) ?? this.options.vfs.readFileSync(join(this.packageDirectory(root.id), file.path))
-    return forgeBundleEntry(typeof bytes === 'string' ? bytes : new TextDecoder().decode(bytes), manifest.plugin.name)
+    return forgeBundleEntries(typeof bytes === 'string' ? bytes : new TextDecoder().decode(bytes), manifest.plugin.name)
+  }
+
+  private entries(manifest: ForgeManifest, prepared?: ReadonlyMap<string, Uint8Array>): ReturnType<typeof forgeBundleEntries> {
+    return this.bundleEntries(manifest, prepared) ?? [{ id: `forge-${manifest.plugin.id}`, name: manifest.plugin.name }]
+  }
+
+  private activationState(entries: ReturnType<typeof forgeBundleEntries>, enabled: boolean): { status: 'active' | 'disabled'; message?: never } | { status: 'activation-failed'; message: string } {
+    let active = false
+    for (const { id, name } of entries) {
+      const expectedActive = enabled && !this.options.isEntryDisabled(id, name)
+      if (this.options.isEntryActive(id, name) !== expectedActive) {
+        return { status: 'activation-failed', message: expectedActive ? 'The selected plugin is not active'
+          : enabled ? 'The disabled plugin is still active' : 'The deselected plugin is still active' }
+      }
+      active ||= expectedActive
+    }
+    return { status: active ? 'active' : 'disabled' }
   }
 
   private currentState(state: ForgeInstalled): ForgeInstalled {
     const manifest = this.manifests.get(state.pluginId)
     if (manifest === undefined) return state
-    const bundle = this.bundleEntry(manifest)
+    const bundle = this.bundleEntries(manifest)
     const patchPath = join(this.options.profileDirectory, 'cordis.patch.yml')
     const enabled = bundle === undefined
       ? this.options.vfs.existsSync(patchPath) && hasForgeProfileEntry(this.options.vfs.readFileSync(patchPath, 'utf8') as string, `forge-${state.pluginId}`)
       : this.bundles(this.profileManifest()).includes(state.name)
-    const id = bundle ?? `forge-${state.pluginId}`
-    const expectedActive = enabled && !this.options.isEntryDisabled(id, state.name)
-    const active = this.options.isEntryActive(id, state.name)
-    const status = expectedActive && active && state.status !== 'activation-failed' ? 'active' : !expectedActive && !active ? 'disabled' : 'activation-failed'
+    const activation = this.activationState(this.entries(manifest), enabled)
+    const status = activation.status === 'active' && state.status === 'activation-failed' ? 'activation-failed' : activation.status
     const { message, ...rest } = state
     return { ...rest, status, ...(status === 'activation-failed' ? {
-      message: message ?? (expectedActive ? 'The selected plugin is not active' : enabled ? 'The disabled plugin is still active' : 'The deselected plugin is still active'),
+      message: message ?? activation.message ?? 'The selected plugin is not active',
     } : {}) }
   }
 
@@ -392,7 +409,9 @@ export class ForgeInstaller {
         }
         this.options.beforeApply(manifest, artifacts)
       }
-      const bundle = this.bundleEntry(manifest, prepared)
+      const bundle = this.bundleEntries(manifest, prepared)
+      const entries = bundle ?? [{ id: `forge-${manifest.plugin.id}`, name: manifest.plugin.name }]
+      const previousEntries = old === undefined ? [] : this.entries(old)
       return this.options.hmr.runExclusive(async () => {
         signal?.throwIfAborted()
         // Revalidate at the mutation entry; no caller can install outside its fixed target.
@@ -405,16 +424,28 @@ export class ForgeInstaller {
         const patchPath = join(this.options.profileDirectory, 'cordis.patch.yml')
         const previousPatch = this.options.vfs.existsSync(patchPath) ? this.options.vfs.readFileSync(patchPath, 'utf8') as string : '[]\n'
         const legacy = hasForgeProfileEntry(previousPatch, `forge-${manifest.plugin.id}`)
-        const enabled = bundle === undefined || old === undefined || legacy || this.bundleEntry(old) === undefined
+        const enabled = bundle === undefined || old === undefined || legacy || this.bundleEntries(old) === undefined
           || this.bundles(this.profileManifest()).includes(manifest.plugin.name)
         const patch = this.patch(manifest.plugin.id, bundle === undefined ? entry : undefined)
         const profilePackage = this.profileDependency(manifest.plugin.name, manifest.plugin.version,
-          bundle === undefined ? old !== undefined && this.bundleEntry(old) !== undefined ? false : undefined : enabled)
+          bundle === undefined ? old !== undefined && this.bundleEntries(old) !== undefined ? false : undefined : enabled)
         const paths: string[] = []
         this.publish({ pluginId: result.pluginId, revision: result.revision, phase: 'begin', paths: [] }, result)
         const rootPackage = manifest.packages.find(pkg => pkg.id === manifest.plugin.packageId)
         if (rootPackage === undefined) throw new ForgeError('invalid-manifest', 'Plugin package is missing')
         this.withFileBatch(() => {
+          if (old !== undefined && old.plugin.packageId !== manifest.plugin.packageId) {
+            // Subpath entries load immutable files rather than the stable root wrapper. Advance their VFS
+            // identities without changing bytes so native HMR stops consumers before replacing their modules.
+            const prefix = pathToFileUrl(this.packageDirectory(old.plugin.packageId)) + '/'
+            for (const record of this.options.modules.hmrModules.records()) {
+              if (!record.url.startsWith(prefix)) continue
+              const path = fileUrlToPath(record.url)
+              this.options.vfs.writeFileSync(path, this.options.vfs.readFileSync(path))
+              result.writtenFiles++
+              paths.push(path)
+            }
+          }
           for (const pkg of manifest.packages) {
             for (const file of pkg.files) {
               const bytes = prepared.get(file.sha256)
@@ -441,18 +472,20 @@ export class ForgeInstaller {
         })
         this.publish({ pluginId: result.pluginId, revision: result.revision, phase: 'files-applied', paths: [...paths] }, result)
         try {
-          const activation = await this.options.hmr.reconcileProfile(enabled ? [bundle ?? `forge-${manifest.plugin.id}`] : [])
+          const activation = await this.options.hmr.reconcileProfile(enabled ? entries.map(entry => entry.id) : [])
           if (activation.warnings.length) result.message = activation.warnings.join('\n')
           if (activation.pending.length || activation.restartReason) {
             throw new ForgeError('activation-failed', JSON.stringify(activation))
           }
-          const id = bundle ?? `forge-${manifest.plugin.id}`
-          const expectedActive = enabled && !this.options.isEntryDisabled(id, manifest.plugin.name)
-          if (this.options.isEntryActive(id, manifest.plugin.name) !== expectedActive) {
-            throw new ForgeError('activation-failed', expectedActive ? 'The selected plugin is not active'
-              : enabled ? 'The disabled plugin is still active' : 'The deselected plugin is still active')
+          const state = this.activationState(entries, enabled)
+          if (state.status === 'activation-failed') throw new ForgeError('activation-failed', state.message)
+          for (const entry of previousEntries) {
+            if (!entries.some(current => current.id === entry.id && current.name === entry.name)
+              && this.options.isEntryActive(entry.id, entry.name)) {
+              throw new ForgeError('activation-failed', 'A replaced plugin entry is still active')
+            }
           }
-          result.status = expectedActive ? 'active' : 'disabled'
+          result.status = state.status
         } catch (error) {
           result.status = 'activation-failed'
           result.message = error instanceof Error ? error.message : String(error)
@@ -485,13 +518,14 @@ export class ForgeInstaller {
       if (snapshot !== undefined) this.options.beforeApply?.(snapshot.manifest, snapshot.artifacts)
       const patch = this.patch(id, undefined)
       const profilePackage = this.profileDependency(manifest.plugin.name, undefined,
-        this.bundleEntry(manifest) === undefined ? undefined : false)
+        this.bundleEntries(manifest) === undefined ? undefined : false)
+      const entries = [manifest, ...this.retired.get(id) ?? []].flatMap(value => this.entries(value))
       const paths: string[] = []
       const result: ForgeResult = { protocol: 1, pluginId: id, revision: manifest.revision, status: 'removed', downloadedFiles: 0, writtenFiles: 0, observerErrors: [] }
       this.publish({ pluginId: id, revision: manifest.revision, phase: 'begin', paths: [] }, result)
       this.withFileBatch(() => {
         this.write(patch.path, patch.text, result, paths)
-        if (this.bundleEntry(manifest) !== undefined) {
+        if (this.bundleEntries(manifest) !== undefined) {
           const deselected = this.profileDependency(manifest.plugin.name, manifest.plugin.version, false)
           this.write(deselected.path, deselected.text, result, paths)
         }
@@ -502,7 +536,7 @@ export class ForgeInstaller {
         const activation = await this.options.hmr.reconcileProfile()
         if (activation.warnings.length) result.message = activation.warnings.join('\n')
         if (activation.pending.length || activation.restartReason) throw new ForgeError('activation-failed', JSON.stringify(activation))
-        if (this.options.isEntryActive(this.bundleEntry(manifest) ?? `forge-${id}`, manifest.plugin.name)) {
+        if (entries.some(entry => this.options.isEntryActive(entry.id, entry.name))) {
           throw new ForgeError('activation-failed', 'The removed plugin is still active')
         }
       } catch (error) {

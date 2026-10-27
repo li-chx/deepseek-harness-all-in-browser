@@ -4,7 +4,7 @@ import type { MemoryVfs } from '../storage/memory.ts'
 import type { WorkerModuleLoader } from '../module-system/module-loader.ts'
 import { join } from '../module-system/posix-path.ts'
 import { forgeSharedPackages } from './package-policy.ts'
-import { forgeBundleEntry } from './profile-patch.ts'
+import { forgeBundleEntries } from './profile-patch.ts'
 import { ForgeError, FORGE_GENERATION, object, parseForgeManifest, type ForgeManifest, type ForgePackageExports } from './protocol.ts'
 
 /** Files applied to the profile, independently of any process's activation outcome. */
@@ -98,7 +98,7 @@ export function readForgeCatalog(vfs: MemoryVfs, profileDirectory: string,
       const root = manifest.packages.find(pkg => pkg.id === manifest.plugin.packageId)
       if (root === undefined) throw new ForgeError('invalid-catalog', 'Installed plugin package is missing')
       const patch = root.metadata?.dsh?.bundle?.patch
-      if (patch !== undefined) forgeBundleEntry(vfs.readFileSync(join(directory, 'packages', root.id, patch), 'utf8') as string, root.name)
+      if (patch !== undefined) forgeBundleEntries(vfs.readFileSync(join(directory, 'packages', root.id, patch), 'utf8') as string, root.name)
     }
     for (const manifest of manifests) {
       const root = manifest.packages.find(pkg => pkg.id === manifest.plugin.packageId)

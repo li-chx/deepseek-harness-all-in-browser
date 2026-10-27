@@ -15,10 +15,9 @@ const profile = '/dsh/home/profiles/web'
 const catalogPath = `${profile}/plugins/.forge/installed.json`
 const hostPackages = { host: '1.0.0' }
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex')
-function plan(version: number) {
+function plan(version: number, patch = '- insert:\n  - id: persisted-plugin\n    name: persistent-plugin\n') {
   const source = `exports.value = require('private-helper').value + ${version}; exports.instance = {}`
   const helper = 'exports.value = 10'
-  const patch = '- insert:\n  - id: persisted-plugin\n    name: persistent-plugin\n'
   const id = hash(source)
   const helperId = hash(helper)
   const files = new Map([[hash(source), source], [hash(helper), helper], [hash(patch), patch]])
@@ -206,3 +205,18 @@ it.each(['schema', 'generation', 'missing', 'hash', 'wrapper', 'public', 'duplic
     expect(() => readForgeCatalog(vfs, profile, hostPackages)).toThrow()
     expect(changes).toEqual([])
   })
+
+
+it('restores verified multi-entry bundle patches before profile activation', async () => {
+  const vfs = new MemoryVfs()
+  base(vfs)
+  const first = assemble(vfs)
+  const patch = '- insert: [{id: service, name: persistent-plugin/service}, {id: tools, name: persistent-plugin/tools}, {id: ui, name: persistent-plugin}]\n'
+  const initial = plan(1, patch)
+  for (const pair of initial.files) first.files.set(...pair)
+  expect(await first.installer.install(initial.manifest, 'http://forge.local')).toMatchObject({ status: 'active' })
+  const restored = assemble(vfs)
+  expect(restored.installer.installed().plugins[0]).toMatchObject({ name: 'persistent-plugin', status: 'active' })
+  expect(vfs.readFileSync(`${profile}/node_modules/persistent-plugin/cordis.patch.yml`, 'utf8')).toBe(patch)
+  expect(await restored.installer.remove('persisted')).toMatchObject({ status: 'removed' })
+})

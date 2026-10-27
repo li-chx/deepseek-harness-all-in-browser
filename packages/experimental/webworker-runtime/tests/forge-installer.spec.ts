@@ -43,7 +43,8 @@ function fixture(clientPackages?: Readonly<Record<string, string>>) {
   let disabled = false
   let activeOverride: boolean | undefined
   let inspect: () => void = () => {}
-  const installer = new ForgeInstaller({ vfs, modules, isEntryActive: () => activeOverride ?? active, isEntryDisabled: () => disabled, profileDirectory: '/dsh/home/profiles/web', ...clientPackages === undefined ? {} : { clientPackages }, hostPackages: { 'host-lib': '1.0.0' },
+  const entryStates = new Map<string, { active?: boolean; disabled?: boolean }>()
+  const installer = new ForgeInstaller({ vfs, modules, isEntryActive: id => entryStates.get(id)?.active ?? activeOverride ?? active, isEntryDisabled: id => entryStates.get(id)?.disabled ?? disabled, profileDirectory: '/dsh/home/profiles/web', ...clientPackages === undefined ? {} : { clientPackages }, hostPackages: { 'host-lib': '1.0.0' },
     hmr: { runExclusive: async operation => operation(), reconcileProfile: async (ids?: readonly string[]) => {
       required.push(ids ?? [])
       inspect()
@@ -59,6 +60,7 @@ function fixture(clientPackages?: Readonly<Record<string, string>>) {
     },
   })
   return { vfs, modules, installer, artifacts, writes, calls, warnings, required,
+    setEntry: (id: string, state: { active?: boolean; disabled?: boolean }): void => { entryStates.set(id, state) },
     setDisabled: (value: boolean): void => { disabled = value },
     setActive: (value: boolean): void => { activeOverride = value },
     onReconcile: (callback: () => void): void => { inspect = callback },
@@ -421,10 +423,11 @@ it.each([
 })
 
 it.each([
-  '- insert: [{id: native-one, name: plugin-one}, {id: extra, name: plugin-one}]\n',
-  '- insert: [{id: native-one, name: plugin-one}]\n- insert: [{id: extra, name: plugin-one}]\n',
+  '- insert: []\n',
+  '- insert: [{id: native-one, name: plugin-one}, {id: native-one, name: plugin-one}]\n',
+  '- insert: [{id: native-one, name: plugin-one}]\n- insert: [{id: native-one, name: plugin-one}]\n',
   '- insert: [{id: native-one, name: plugin-one}]\n  remove: other\n',
-])('rejects additional bundle entries or operations before any write', async (patch) => {
+])('rejects empty or duplicate bundle entries and unsupported operations before any write', async (patch) => {
   const f = fixture()
   const first = publishedPlan('exports.value = 1', patch)
   for (const pair of first.files) f.artifacts.set(...pair)
@@ -559,7 +562,7 @@ it('rejects override-only patches without the plugin insertion before writes', a
   const f = fixture()
   const first = publishedPlan('exports.value = 1', '- id: base\n  disabled: true\n')
   for (const pair of first.files) f.artifacts.set(...pair)
-  await expect(f.installer.install(first.manifest, 'http://forge.local')).rejects.toThrow('must contain exactly one insert')
+  await expect(f.installer.install(first.manifest, 'http://forge.local')).rejects.toThrow('must contain at least one package insert entry')
   expect(f.writes).toEqual([])
 })
 
@@ -822,3 +825,91 @@ it.each(['missing', 'duplicate', 'undeclared', 'private-conflict'] as const)('re
   expect(f.calls).toEqual([])
   expect(f.writes).toEqual([])
 })
+
+const multiPatch = '- insert:\n  - {id: knowledge, name: plugin-one/knowledge, config: {embeddingProvider: none}}\n  - {id: tool-knowledge, name: plugin-one/tool-knowledge}\n- insert: [{id: ui-knowledge, name: plugin-one}]\n'
+
+it('requires every bundle entry and preserves native selection through updates and removal', async () => {
+  const f = fixture()
+  const first = publishedPlan('exports.value = 1', multiPatch)
+  for (const pair of first.files) f.artifacts.set(...pair)
+  expect(await f.installer.install(first.manifest, 'http://forge.local')).toMatchObject({ status: 'active' })
+  expect(f.required.at(-1)).toEqual(['knowledge', 'tool-knowledge', 'ui-knowledge'])
+  f.setEntry('knowledge', { active: false })
+  expect(f.installer.installed().plugins[0]?.status).toBe('activation-failed')
+  f.setEntry('knowledge', { active: true })
+  const second = publishedPlan('exports.value = 2', multiPatch)
+  for (const pair of second.files) f.artifacts.set(...pair)
+  expect(await f.installer.install(second.manifest, 'http://forge.local')).toMatchObject({ status: 'active' })
+  expect(f.vfs.readFileSync('/dsh/home/profiles/web/node_modules/plugin-one/cordis.patch.yml', 'utf8')).toBe(multiPatch)
+  nativeSelection(f, [])
+  f.setActive(false)
+  f.setEntry('knowledge', { active: false })
+  expect(await f.installer.install(second.manifest, 'http://forge.local')).toMatchObject({ status: 'disabled' })
+  expect(f.required.at(-1)).toEqual([])
+  expect(await f.installer.remove('one')).toMatchObject({ status: 'removed' })
+  expect(f.vfs.existsSync('/dsh/home/profiles/web/node_modules/plugin-one')).toBe(false)
+})
+
+it('reports an inactive secondary entry as failure instead of accepting the active root', async () => {
+  const f = fixture()
+  const first = publishedPlan('exports.value = 1', multiPatch)
+  for (const pair of first.files) f.artifacts.set(...pair)
+  f.setEntry('tool-knowledge', { active: false })
+  expect(await f.installer.install(first.manifest, 'http://forge.local')).toMatchObject({ status: 'activation-failed' })
+  expect(f.installer.installed().plugins[0]?.status).toBe('activation-failed')
+  expect(f.vfs.existsSync('/dsh/home/profiles/web/node_modules/plugin-one')).toBe(true)
+  f.setEntry('tool-knowledge', { active: true })
+  expect(await f.installer.install(first.manifest, 'http://forge.local')).toMatchObject({ status: 'active' })
+})
+
+it('allows disabled bundle members while verifying each enabled member', async () => {
+  const f = fixture()
+  const first = publishedPlan('exports.value = 1', multiPatch)
+  for (const pair of first.files) f.artifacts.set(...pair)
+  f.setEntry('knowledge', { active: false, disabled: true })
+  expect(await f.installer.install(first.manifest, 'http://forge.local')).toMatchObject({ status: 'active' })
+  f.setEntry('tool-knowledge', { active: false, disabled: true })
+  f.setEntry('ui-knowledge', { active: false, disabled: true })
+  expect(f.installer.installed().plugins[0]?.status).toBe('disabled')
+  expect(await f.installer.install(first.manifest, 'http://forge.local')).toMatchObject({ status: 'disabled' })
+  f.setEntry('knowledge', { active: true, disabled: true })
+  expect(f.installer.installed().plugins[0]?.status).toBe('activation-failed')
+})
+
+it('retains package files when one removed member remains active', async () => {
+  const f = fixture()
+  const first = publishedPlan('exports.value = 1', multiPatch)
+  for (const pair of first.files) f.artifacts.set(...pair)
+  await f.installer.install(first.manifest, 'http://forge.local')
+  f.setEntry('tool-knowledge', { active: true })
+  expect(await f.installer.remove('one')).toMatchObject({ status: 'activation-failed', message: 'The removed plugin is still active' })
+  expect(f.vfs.existsSync('/dsh/home/profiles/web/node_modules/plugin-one')).toBe(true)
+  f.setEntry('tool-knowledge', { active: false })
+  expect(await f.installer.remove('one')).toMatchObject({ status: 'removed' })
+})
+
+it('retains previous artifacts when a replaced member remains active', async () => {
+  const f = fixture()
+  const first = publishedPlan('exports.value = 1', multiPatch)
+  for (const pair of first.files) f.artifacts.set(...pair)
+  await f.installer.install(first.manifest, 'http://forge.local')
+  const second = publishedPlan('exports.value = 2', multiPatch.replace('tool-knowledge', 'new-tools'))
+  for (const pair of second.files) f.artifacts.set(...pair)
+  f.setEntry('tool-knowledge', { active: true })
+  expect(await f.installer.install(second.manifest, 'http://forge.local')).toMatchObject({ status: 'activation-failed', message: 'A replaced plugin entry is still active' })
+  const previous = `/dsh/home/profiles/web/plugins/.forge/packages/${first.manifest.plugin.packageId}`
+  expect(f.vfs.existsSync(previous)).toBe(true)
+  f.setEntry('tool-knowledge', { active: false })
+  expect(await f.installer.install(second.manifest, 'http://forge.local')).toMatchObject({ status: 'active' })
+  expect(f.vfs.existsSync(previous)).toBe(false)
+})
+
+it.each(['plugin-one-other', 'other/subpath', 'plugin-one/', 'plugin-one/../escape', 'plugin-one/./part', 'plugin-one/node_modules/other', 'plugin-one/a//b', 'plugin-one/a?b', 'plugin-one/a%2fb'])(
+  'rejects a foreign or unsafe bundle module %s before writing files', async (name) => {
+    const f = fixture()
+    const first = publishedPlan('exports.value = 1', `- insert: [{id: entry, name: "${name}"}]`)
+    for (const pair of first.files) f.artifacts.set(...pair)
+    await expect(f.installer.install(first.manifest, 'http://forge.local')).rejects.toMatchObject({ code: 'unsupported-bundle' })
+    expect(f.writes).toEqual([])
+  },
+)
