@@ -97,6 +97,8 @@ export interface WorkerHostSourceOptions {
   readonly image?: string | URL
   /** Fixture catalog URL; defaults to {@link PREVIEW_FIXTURE_MANIFEST_FILE} beside the image. */
   readonly fixtureManifest?: string | URL
+  /** Fixture ID or `none`; omission reads the page query or opens the chooser. */
+  readonly fixture?: string
 }
 
 /** Filesystem inputs selected before {@link connectWorkerHost}. */
@@ -143,7 +145,7 @@ function holdWorkerHostBoot(): void {
  * the stock shell until the caller passes its result to {@link connectWorkerHost};
  * callers that need no chooser call `connectWorkerHost` directly and receive
  * the base image with an empty overlay list.
- * @param options - Base image and optional fixture-catalog locations.
+ * @param options - Base image, optional fixture catalog and explicit source selection.
  * @returns The ordered overlays selected by the user.
  */
 export async function chooseWorkerHostSource(
@@ -153,7 +155,7 @@ export async function chooseWorkerHostSource(
   const image = new URL(options.image ?? IMAGE_FILE_NAME, document.baseURI)
   const manifest = new URL(options.fixtureManifest ?? PREVIEW_FIXTURE_MANIFEST_FILE, image)
   try {
-    const overlays = await choosePreviewSource(manifest)
+    const overlays = await choosePreviewSource(manifest, options.fixture)
     return { overlays }
   } catch (reason) {
     bootReadyGate().reject(reason)

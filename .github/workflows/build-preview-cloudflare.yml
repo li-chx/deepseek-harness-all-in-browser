@@ -79,13 +79,9 @@ jobs:
         run: pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
 
       # Sourcemaps carry complete sources and stay off the deployment platform.
-      # index.html is the served page, which cannot boot without a host
-      # injecting window.__DSH_BOOT__; replacing it with the worker page makes
-      # the deployment root the usable entry instead of a page that never boots.
       - name: Shape the upload
         run: |
           find apps/web/dist -name '*.map' -delete
-          cp apps/web/dist/preview.html apps/web/dist/index.html
 
       - name: Upload to Cloudflare Pages
         env:

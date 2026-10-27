@@ -191,10 +191,12 @@ function fixtureChoices(entries: readonly PreviewFixtureManifestEntry[], manifes
 /**
  * Render the source chooser and wait for an enabled selection.
  * @param manifestUrl - Built-in fixture catalog URL.
+ * @param requested - Explicit source; omission reads the page query before opening the chooser.
  * @returns Ordered overlay URLs selected for the Worker mount.
  */
-export async function choosePreviewSource(manifestUrl: URL): Promise<readonly URL[]> {
-  const requested = new URL(location.href).searchParams.get(PREVIEW_FIXTURE_QUERY)
+export async function choosePreviewSource(manifestUrl: URL,
+  requested: string | null = new URL(location.href).searchParams.get(PREVIEW_FIXTURE_QUERY),
+): Promise<readonly URL[]> {
   if (requested === EMPTY_SOURCE) return []
 
   const response = await fetch(manifestUrl)

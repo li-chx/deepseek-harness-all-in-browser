@@ -6,13 +6,14 @@
 
 **AIB — All in Browser** 将 DeepSeek Harness 的智能体运行时带入浏览器。在一个页面里进行对话、调用工具、操作虚拟文件，并构建插件来扩展智能体能力和界面。
 
-项目的目标是让浏览器成为使用和扩展智能体框架的工作区。Host 运行在 Web Worker 中，文件保存在虚拟文件系统里，**dsh-aib** 工作台负责管理源码项目、插件版本和备份。模型推理通过外部 API 完成；可选的 DSH Forge 负责构建插件源码和准备 npm 包。
+项目的目标是让浏览器成为使用和扩展智能体框架的工作区。Host 运行在 Web Worker 中，文件保存在虚拟文件系统里，**dsh-aib** 工作台负责管理源码项目、插件版本和备份。模型推理通过外部 API 完成；可选的 [DSH Forge](https://github.com/li-chx/dsh-aib-forge.git) 负责构建插件源码和准备 npm 包。
 
 这是一个独立的实验性 [DeepSeek Harness 分支](https://github.com/deepseek-ai/deepseek-harness)，上游项目由 DeepSeek AI 开发。浏览器兼容性和 API 仍在持续演进。
 
 ## 目录
 
 - [为什么选择 AIB？](#why-aib)
+- [演示与 API Key](#demo-and-api-key)
 - [项目目标](#project-goals)
 - [技术设计](#how-it-works)
 - [运行浏览器预览](#run-the-browser-preview)
@@ -31,6 +32,13 @@
 如果 DeepSeek 官方推出 Android DSH 客户端，社区也能规范插件分发方式，提供开箱即用的插件整合包，AIB 就会失去这些分发优势。这是正常且值得欢迎的结果。
 
 **AIB 并非零后端。** 安装或编译新插件仍然需要已部署的 DSH Forge 服务。Forge 是不承载用户运行状态的无状态构建后端：它可以保留构建产物与缓存，但不托管用户的 Session 或长期运行的 Harness 实例。即使没有 Forge，已打包的应用及其内置能力仍可正常使用，只是无法安装和编译插件。模型推理仍通过外部 API 完成。
+
+<a id="demo-and-api-key"></a>
+## 演示与 API Key
+
+计划中的演示地址：[https://dsh-aiw.lichx.top](https://dsh-aiw.lichx.top)（待部署）。
+
+演示不预置公共 API Key，需要自行填写临时 Key。默认直连模型 API 时，Key 保存在浏览器本地，仅随鉴权请求发送给所配置的模型提供商，不提交给演示站点服务器或 Forge 后端。自定义代理和第三方插件需要自行信任；请勿把 Key 写入提交给 Forge 编译的源码。**推荐体验结束后立即在模型提供商控制台撤销或删除临时 Key。**
 
 <a id="project-goals"></a>
 ## 项目目标
@@ -77,13 +85,39 @@ pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
 pnpm --filter @deepseek-ai/dsh-web-frontend run serve:preview
 ```
 
-打开[本地预览](http://localhost:4173/preview.html?preview-fixture=none&storage=indexeddb)。该地址不加载示例数据，并启用 IndexedDB 持久化。预览需要 HTTPS 或 localhost/回环地址，以便 Service Worker 接管页面。部署时请完整发布 `apps/web/dist/` 目录，包括资源桥接脚本、静态资源目录和 VFS 归档。
+打开[本地预览](http://localhost:4173/?preview-fixture=none&storage=indexeddb)。站点根路径会携带原有 URL 参数跳转到 `preview.html`；该链接不加载示例数据，并启用 IndexedDB 持久化。预览需要 HTTPS 或 localhost/回环地址，以便 Service Worker 接管页面。部署时请完整发布 `apps/web/dist/` 目录，包括资源桥接脚本、静态资源目录和 VFS 归档。
+
+部署到 EO 或其他静态平台时，使用 Node.js 24 和以下配置。`build:preview` 会生成跳转到 `preview.html` 的 `index.html`，保留查询参数和 hash，访问者可以直接打开部署站点的根地址。
+
+| 部署配置 | 值 |
+|---|---|
+| 根目录 | `./`（仓库根目录） |
+| 安装命令 | `pnpm install --frozen-lockfile` |
+| 构建命令 | `pnpm run build:artifacts && pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` |
+| 输出目录 | `apps/web/dist` |
+
+在前端的**构建进程**中设置以下公开环境变量，即可让部署站点的根地址使用你的默认配置：
+
+| 环境变量 | 对应 URL 参数 | 可用值 |
+|---|---|---|
+| `DSH_CLIENT_PREVIEW_FIXTURE` | `preview-fixture` | `none` 表示空环境，也可指定已构建目录中的 fixture ID。 |
+| `DSH_CLIENT_FORGE_URL` | `forge` | 兼容 Forge 服务的绝对 HTTP(S) 地址。 |
+| `DSH_CLIENT_STORAGE` | `storage` | `indexeddb` 启用持久化，`none` 使用临时运行时。 |
+
+```sh
+DSH_CLIENT_PREVIEW_FIXTURE=none \
+DSH_CLIENT_FORGE_URL=https://forge-dsh-aib.lichx.top \
+DSH_CLIENT_STORAGE=indexeddb \
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+```
+
+显式 URL 参数优先于对应的构建默认值，包括空参数。环境变量为空或未设置时，保留原有启动行为。浏览器已保存的 Forge 地址优先于这两种初始地址。这些值会写入公开的 JavaScript；构建完成后再修改静态服务器的环境变量不会生效，更换默认值需要重新构建。构建默认值不会作为配置参数自动追加到浏览器地址栏。
 
 在侧栏打开 **dsh-aib**，管理文件和插件项目。**保存文件**将编辑草稿写入 VFS；**构建项目**通过 Forge 编译已保存的源码；**立即保存**排空 Session 待写入数据并确认浏览器存储提交。刷新或关闭页面前请先保存。
 
 如需构建或安装插件，请运行兼容的 Forge 服务，并在工作台的「设置」中配置服务地址。Forge 必须匹配前端的代际标识和共享包版本。编辑文件、浏览保留的历史版本不需要 Forge。插件构建与安装方式见 [Forge 集成参考](packages/experimental/webworker-runtime/README.zh.md#forge-plugin-updates)。
 
-模型请求需要提供商凭据和可访问的模型 API。公开部署时，请勿将私人凭据放入静态镜像。上游 npm CLI 和 `pnpm dsh web` 启动的是 Node Host；本文介绍的浏览器运行时请通过 `preview.html` 使用。
+模型请求需要提供商凭据和可访问的模型 API。公开部署时，请勿将私人凭据放入静态镜像。上游 npm CLI 和 `pnpm dsh web` 启动的是 Node Host；本文介绍的浏览器运行时请使用上面的浏览器预览构建方式。
 
 <a id="current-limitations"></a>
 ## 当前限制

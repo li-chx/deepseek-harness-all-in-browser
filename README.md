@@ -6,13 +6,14 @@ English | [中文](README.zh.md)
 
 **AIB — All in Browser** brings the DeepSeek Harness agent runtime into the browser. Run conversations and tools, work with virtual files, and build plugins that extend both the agent and its interface from one page.
 
-The goal is to make the browser a workspace for using and extending an agent harness. The Host runs in a Web Worker, files live in a virtual filesystem, and the **dsh-aib** workbench manages source projects, plugin revisions and backups. Model inference uses external APIs; optional DSH Forge builds plugin sources and prepares npm packages.
+The goal is to make the browser a workspace for using and extending an agent harness. The Host runs in a Web Worker, files live in a virtual filesystem, and the **dsh-aib** workbench manages source projects, plugin revisions and backups. Model inference uses external APIs; optional [DSH Forge](https://github.com/li-chx/dsh-aib-forge.git) builds plugin sources and prepares npm packages.
 
 This is an independent, experimental [fork of DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), developed upstream by DeepSeek AI. Browser compatibility and APIs are still evolving.
 
 ## Table of Contents
 
 - [Why AIB?](#why-aib)
+- [Demo and API key](#demo-and-api-key)
 - [Project goals](#project-goals)
 - [How it works](#how-it-works)
 - [Run the browser preview](#run-the-browser-preview)
@@ -31,6 +32,13 @@ Moving an agent harness and its capabilities into the browser inevitably introdu
 If DeepSeek releases an official Android DSH client and the community standardizes plugin distribution into ready-to-use packs, AIB would lose these distribution advantages. That would be a normal and welcome outcome.
 
 **AIB does not mean zero backend.** Installing or compiling new plugins still requires a deployed DSH Forge service. Forge is stateless with respect to user runtime: it may retain build artifacts and caches, but does not host users' Sessions or long-running Harness instances. Without Forge, the packaged application and its included capabilities remain usable; plugin installation and compilation are unavailable. Model inference still uses external APIs.
+
+<a id="demo-and-api-key"></a>
+## Demo and API key
+
+Planned demo: [https://dsh-aiw.lichx.top](https://dsh-aiw.lichx.top) (deployment pending).
+
+The demo has no shared API key; supply your own temporary key. With the default direct model API connection, the key stays in browser-local storage and is sent only to your configured model provider for authentication, not to the demo site's server or Forge backend. Custom proxies and third-party plugins require your trust; do not include keys in source code submitted to Forge. **Revoke or delete the temporary key in your model provider's console immediately after trying the demo.**
 
 <a id="project-goals"></a>
 ## Project goals
@@ -77,13 +85,39 @@ pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
 pnpm --filter @deepseek-ai/dsh-web-frontend run serve:preview
 ```
 
-Open [the local preview](http://localhost:4173/preview.html?preview-fixture=none&storage=indexeddb). This URL starts without example data and enables IndexedDB persistence. The preview requires HTTPS or a localhost/loopback origin for Service Worker control. Deploy the complete `apps/web/dist/` directory together, including the resource bridge, static-asset catalog and VFS archives.
+Open [the local preview](http://localhost:4173/?preview-fixture=none&storage=indexeddb). The site root redirects to `preview.html` with the URL parameters intact; this link starts without example data and enables IndexedDB persistence. The preview requires HTTPS or a localhost/loopback origin for Service Worker control. Deploy the complete `apps/web/dist/` directory together, including the resource bridge, static-asset catalog and VFS archives.
+
+For EO or another static host, use Node.js 24 and the following settings. `build:preview` emits an `index.html` redirect to `preview.html`, preserving query parameters and the hash, so visitors can open the deployment's root URL directly.
+
+| Deployment setting | Value |
+|---|---|
+| Project root | `./` (repository root) |
+| Install command | `pnpm install --frozen-lockfile` |
+| Build command | `pnpm run build:artifacts && pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview` |
+| Output directory | `apps/web/dist` |
+
+Set these public environment variables in the frontend **build process** to make the deployment's root URL use your defaults:
+
+| Environment variable | Equivalent URL parameter | Values |
+|---|---|---|
+| `DSH_CLIENT_PREVIEW_FIXTURE` | `preview-fixture` | `none` for an empty environment, or a fixture ID from the built catalog. |
+| `DSH_CLIENT_FORGE_URL` | `forge` | Absolute HTTP(S) URL of your compatible Forge service. |
+| `DSH_CLIENT_STORAGE` | `storage` | `indexeddb` for persistence, or `none` for a temporary runtime. |
+
+```sh
+DSH_CLIENT_PREVIEW_FIXTURE=none \
+DSH_CLIENT_FORGE_URL=https://forge-dsh-aib.lichx.top \
+DSH_CLIENT_STORAGE=indexeddb \
+pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview
+```
+
+An explicitly supplied URL parameter overrides its build default, including an empty parameter. Empty or unset environment values retain the existing startup behavior. The Forge address saved in the browser takes precedence over either initial address. These values are embedded in public JavaScript; changing the static server's environment after building has no effect, so rebuild to change defaults. Build defaults do not append configuration parameters to the browser address bar.
 
 Open **dsh-aib** in the sidebar to manage files and plugin projects. **Save file** writes an editor draft into the VFS; **Build project** compiles saved sources through Forge; **Save now** drains Session writes and confirms browser-storage commits. Save before refreshing or closing the page.
 
 To build or install plugins, run a compatible Forge service and configure its endpoint in the workbench's Settings. Forge must match the frontend's generation and shared-package versions. File editing and browsing retained revisions do not require Forge. Follow the [Forge integration reference](packages/experimental/webworker-runtime/README.md#forge-plugin-updates) for plugin builds and installation.
 
-Model requests need provider credentials and a reachable model API. Public deployments must keep private credentials out of their static images. The upstream npm CLI and `pnpm dsh web` launch a Node Host; use `preview.html` for the browser-hosted runtime described here.
+Model requests need provider credentials and a reachable model API. Public deployments must keep private credentials out of their static images. The upstream npm CLI and `pnpm dsh web` launch a Node Host; use the browser preview build above for the browser-hosted runtime described here.
 
 <a id="current-limitations"></a>
 ## Current limitations

@@ -46,7 +46,6 @@ describe('PR preview workflow', () => {
     expect(workflow.env.CF_PROJECT).toBe('dsh-build-preview')
     const shape = preview.steps.find(step => step.name === 'Shape the upload')!
     expect(shape.run).toContain("find apps/web/dist -name '*.map' -delete")
-    expect(shape.run).toContain('cp apps/web/dist/preview.html apps/web/dist/index.html')
     const deploy = preview.steps.find(step => step.name === 'Upload to Cloudflare Pages')!
     expect(deploy.run).toContain('npx --yes wrangler@4 pages deploy apps/web/dist')
     expect(deploy.run).toContain('--branch "pr-${{ github.event.pull_request.number }}"')

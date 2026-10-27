@@ -6,19 +6,26 @@
  * Everything after those calls is the served startup chain verbatim.
  */
 import { mountAiwPreview } from './aiw-preview.ts'
+import { previewPageUrl } from './preview-config.ts'
 import DshWorker from '@deepseek-ai/dsh-experimental-webworker-runtime/worker?worker'
 import {
   chooseWorkerHostSource, connectWorkerHost, IMAGE_FILE_NAME,
 } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
 
+const page = previewPageUrl(new URL(location.href), {
+  'preview-fixture': process.env.DSH_CLIENT_PREVIEW_FIXTURE,
+  forge: process.env.DSH_CLIENT_FORGE_URL,
+  storage: process.env.DSH_CLIENT_STORAGE,
+})
 const transportReady = Promise.withResolvers<import('@deepseek-ai/dsh-experimental-webworker-runtime/client').TunnelFetch>()
-const disposeAiw = mountAiwPreview(transportReady.promise, new URL(location.href).searchParams.get('forge') ?? undefined)
+const disposeAiw = mountAiwPreview(transportReady.promise, page.searchParams.get('forge') ?? undefined)
 window.addEventListener('pagehide', disposeAiw, { once: true })
 
 const image = `preview/${IMAGE_FILE_NAME}`
-const source = await chooseWorkerHostSource({ image })
+const fixture = page.searchParams.get('preview-fixture')
+const source = await chooseWorkerHostSource({ image, ...fixture === null ? {} : { fixture } })
 const { mountPreviewStorage, previewStorageOptions } = await import('./preview-storage.ts')
-const storage = previewStorageOptions(new URL(location.href), new URL(image, document.baseURI), source.overlays)
+const storage = previewStorageOptions(page, new URL(image, document.baseURI), source.overlays)
 const storageUi = storage === undefined ? undefined : mountPreviewStorage()
 try {
   const connection = await connectWorkerHost(new DshWorker({ name: 'dsh-host' }), {

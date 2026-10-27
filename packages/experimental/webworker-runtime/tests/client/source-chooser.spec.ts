@@ -67,6 +67,24 @@ describe('Preview source chooser', () => {
     expect(document.querySelector('[data-preview-source-chooser]')).toBeNull()
   })
 
+  it('accepts a deployment-selected empty source without adding a page query', async () => {
+    const fetch = installManifest()
+    await expect(choosePreviewSource(MANIFEST_URL, 'none')).resolves.toEqual([])
+    expect(fetch).not.toHaveBeenCalled()
+    expect(location.search).toBe('')
+    expect(document.querySelector('[data-preview-source-chooser]')).toBeNull()
+  })
+
+  it('resolves a deployment-selected fixture through the same catalog validation', async () => {
+    installManifest()
+    await expect(choosePreviewSource(MANIFEST_URL, 'example')).resolves.toEqual([
+      new URL('https://preview.test/preview/fixtures/base.tar.gz'),
+      new URL('https://preview.test/preview/fixtures/tail.tar.gz'),
+    ])
+    await expect(choosePreviewSource(MANIFEST_URL, 'missing')).rejects.toThrow(/unknown or interactive source/)
+    expect(location.search).toBe('')
+  })
+
   it.each(['', 'missing', 'webfs'])(
     'fails loud for the explicit unavailable source %j without opening the chooser',
     async (source) => {
