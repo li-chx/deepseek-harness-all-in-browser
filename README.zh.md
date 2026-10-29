@@ -36,7 +36,7 @@
 <a id="demo-and-api-key"></a>
 ## 演示与 API Key
 
-计划中的演示地址：[https://dsh-aiw.lichx.top](https://dsh-aiw.lichx.top)（待部署）。
+在线演示：[https://dsh-aib.lichx.top](https://dsh-aib.lichx.top)。
 
 演示不预置公共 API Key，需要自行填写临时 Key。默认直连模型 API 时，Key 保存在浏览器本地，仅随鉴权请求发送给所配置的模型提供商，不提交给演示站点服务器或 Forge 后端。自定义代理和第三方插件需要自行信任；请勿把 Key 写入提交给 Forge 编译的源码。**推荐体验结束后立即在模型提供商控制台撤销或删除临时 Key。**
 

@@ -36,7 +36,7 @@ If DeepSeek releases an official Android DSH client and the community standardiz
 <a id="demo-and-api-key"></a>
 ## Demo and API key
 
-Planned demo: [https://dsh-aiw.lichx.top](https://dsh-aiw.lichx.top) (deployment pending).
+Live demo: [https://dsh-aib.lichx.top](https://dsh-aib.lichx.top).
 
 The demo has no shared API key; supply your own temporary key. With the default direct model API connection, the key stays in browser-local storage and is sent only to your configured model provider for authentication, not to the demo site's server or Forge backend. Custom proxies and third-party plugins require your trust; do not include keys in source code submitted to Forge. **Revoke or delete the temporary key in your model provider's console immediately after trying the demo.**
 
